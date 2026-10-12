@@ -1,16 +1,19 @@
 name: 构建 Anland 软件包
 run-name: Anland 软件包 ${{ github.run_number }}
 
-# 四条互相独立的流水线合并在这一个工作流里，各自的发布互不干扰：
+# 七套软件包各自由布尔开关控制，可以同时选择；构建失败不取消其他目标。
 #   kde     —— Anland KDE Wayland（kwin + Xwayland），发布 anland-kde-packages
 #   gnome   —— Anland GNOME Wayland（Mutter + patched Xwayland），发布 anland-gnome-packages
 #   session —— Anland Next session 原生包，发布 anland-session-packages
 #   niri    —— Anland Niri Arch ARM64 包（niri + patched Xwayland），发布 anland-niri-packages
-# 每条流水线由一个布尔开关控制，可以同时打开，构建与上传都并行进行；
-# 关闭的流水线不会产生任何 job，也不会触碰它自己的固定发布。
+#   mango   —— Arch ARM64 私有 Mango + patched Xwayland，上传可下载的 Artifact
+#   hyprland —— Arch ARM64 Hyprland + hyprpm + patched Xwayland，上传可下载的 Artifact
+#   denial  —— Arch ARM64 Flutter engine + Denial + desktop + Xwayland，上传 Artifact
+# Mango/Hyprland/Denial 只要求 runner 编译成功、产物完整并可取回；不安装、不启动图形会话。
+# 关闭的流水线跳过构建，原有四套固定发布互不干扰。
 on:
   schedule:
-    # 每天北京时间 08:00（UTC 00:00）构建全部四套软件包。
+    # 每天北京时间 08:00（UTC 00:00）构建全部七套软件包。
     - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
@@ -36,7 +39,7 @@ on:
         description: KDE 使用的 Anland 仓库地址
         required: true
         type: string
-        default: https://github.com/superturtlee/anland.git
+        default: https://github.com/sjszero/anland.git
       kde_ref:
         description: KDE 使用的 Anland 分支、标签或提交
         required: true
@@ -62,7 +65,7 @@ on:
         description: GNOME 使用的 Anland 仓库地址
         required: true
         type: string
-        default: https://github.com/superturtlee/anland.git
+        default: https://github.com/sjszero/anland.git
       gnome_ref:
         description: GNOME 使用的 Anland 分支、标签或提交
         required: true
@@ -112,6 +115,32 @@ on:
         required: true
         type: string
         default: legacy
+      # —— Mango / Hyprland / Denial（Arch Linux ARM）——
+      build_mango:
+        description: 构建 Mango Arch ARM64 软件包（Mango + Xwayland，上传 Artifact）
+        required: true
+        type: boolean
+        default: true
+      build_hyprland:
+        description: 构建 Hyprland Arch ARM64 软件包（Hyprland + hyprpm + Xwayland，上传 Artifact）
+        required: true
+        type: boolean
+        default: true
+      build_denial:
+        description: 构建 Denial Arch ARM64 软件包（engine + Denial + desktop + Xwayland，上传 Artifact）
+        required: true
+        type: boolean
+        default: true
+      wm_repo:
+        description: Mango / Hyprland / Denial 使用的 Anland 仓库地址
+        required: true
+        type: string
+        default: https://github.com/sjszero/anland.git
+      wm_ref:
+        description: Mango / Hyprland / Denial 使用的 Anland 分支、标签或提交
+        required: true
+        type: string
+        default: legacy
       # —— 通用 ——
       publish_cnb:
         description: 同步发布到 CNB 国内镜像
@@ -131,6 +160,7 @@ jobs:
       gnome: ${{ steps.select.outputs.gnome }}
       session: ${{ steps.select.outputs.session }}
       niri: ${{ steps.select.outputs.niri }}
+      arch_wms: ${{ steps.select.outputs.arch_wms }}
     steps:
       - name: 选择要构建的流水线
         id: select
@@ -140,25 +170,34 @@ jobs:
           GNOME_INPUT: ${{ inputs.build_gnome }}
           SESSION_INPUT: ${{ inputs.build_session }}
           NIRI_INPUT: ${{ inputs.build_niri }}
+          MANGO_INPUT: ${{ inputs.build_mango }}
+          HYPRLAND_INPUT: ${{ inputs.build_hyprland }}
+          DENIAL_INPUT: ${{ inputs.build_denial }}
         shell: bash
         run: |
           set -euo pipefail
 
-          # 定时构建始终构建全部四套软件包；手动触发按各自的布尔开关选择。
+          # 定时构建全部七套；手动触发按各自的布尔开关选择。
           if [ "$EVENT_NAME" = schedule ]; then
             kde=true
             gnome=true
             session=true
             niri=true
+            mango=true
+            hyprland=true
+            denial=true
           else
             kde="${KDE_INPUT:-false}"
             gnome="${GNOME_INPUT:-false}"
             session="${SESSION_INPUT:-false}"
             niri="${NIRI_INPUT:-false}"
+            mango="${MANGO_INPUT:-false}"
+            hyprland="${HYPRLAND_INPUT:-false}"
+            denial="${DENIAL_INPUT:-false}"
           fi
 
           enabled=()
-          for entry in "kde=$kde" "gnome=$gnome" "session=$session" "niri=$niri"; do
+          for entry in "kde=$kde" "gnome=$gnome" "session=$session" "niri=$niri" "mango=$mango" "hyprland=$hyprland" "denial=$denial"; do
             if [ "${entry#*=}" = true ]; then
               enabled+=("${entry%%=*}")
             fi
@@ -173,8 +212,226 @@ jobs:
             echo "gnome=$gnome"
             echo "session=$session"
             echo "niri=$niri"
+            arch_wms='['
+            separator=''
+            for wm in mango hyprland denial; do
+              if [ "${!wm}" = true ]; then
+                arch_wms+="${separator}\"${wm}\""
+                separator=','
+              fi
+            done
+            arch_wms+=']'
+            echo "arch_wms=$arch_wms"
           } >> "$GITHUB_OUTPUT"
           echo "本次构建：${enabled[*]}"
+
+  # ===========================================================================
+  # Mango / Hyprland / Denial（Arch ARM64）：编译、收集、上传并取回产物即可。
+  # ===========================================================================
+  prepare-arch-wms:
+    name: 解析 Mango / Hyprland / Denial 源码版本
+    needs: select
+    if: ${{ needs.select.outputs.arch_wms != '[]' }}
+    runs-on: ubuntu-24.04
+    outputs:
+      anland_commit: ${{ steps.resolve.outputs.anland_commit }}
+      wms: ${{ needs.select.outputs.arch_wms }}
+    steps:
+      - name: 要求从 main 分支触发
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_NAME" != main ]; then
+            echo "此工作流必须从 main 分支触发。" >&2
+            exit 1
+          fi
+
+      - name: 将请求的源解析为单个提交
+        id: resolve
+        env:
+          ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+          ANLAND_REF: ${{ inputs.wm_ref || 'legacy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/anland-arch-wm-source"
+          git init --quiet "$source_dir"
+          git -C "$source_dir" remote add origin "$ANLAND_REPO"
+          git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_REF"
+          anland_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
+          git -C "$source_dir" cat-file -e "${anland_commit}^{commit}"
+          echo "anland_commit=$anland_commit" >> "$GITHUB_OUTPUT"
+          echo "已将 $ANLAND_REPO @ $ANLAND_REF 解析为 $anland_commit"
+
+  build-arch-wms:
+    name: 构建 ${{ matrix.wm }} Arch ARM64 软件包
+    needs: prepare-arch-wms
+    runs-on: ubuntu-24.04-arm
+    # Denial 在干净 runner 上还要从锁定源码编译 Flutter engine。
+    timeout-minutes: ${{ matrix.wm == 'denial' && 360 || 180 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        wm: ${{ fromJson(needs.prepare-arch-wms.outputs.wms) }}
+    env:
+      WM: ${{ matrix.wm }}
+      ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+      ANLAND_COMMIT: ${{ needs.prepare-arch-wms.outputs.anland_commit }}
+    steps:
+      - name: 在 Arch Linux ARM 中构建，不安装或启动会话
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$GITHUB_WORKSPACE/.arch-wm-package-build/$WM"
+          mkdir -p "$output_dir"
+          # 挂载父目录而不是 ARTIFACTS 本身，允许 build.sh 原子交换产物目录。
+          docker run --rm -i \
+            --platform linux/arm64 \
+            -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+            -v "$output_dir:/output" \
+            ogarcia/archlinux:latest \
+            bash -s <<'ANLAND_ARCH_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+              set -euo pipefail
+              case "$WM" in mango|hyprland|denial) ;; *) echo "未知的 WM：$WM" >&2; exit 1 ;; esac
+              pacman -Syu --noconfirm
+              pacman -S --noconfirm --needed base-devel git ca-certificates sudo \
+                python gnupg cmake meson ninja pkgconf patchelf
+              # 只交付运行时包，避免 Arch 默认 debug 分包混入预期的软件包集合。
+              printf '\nOPTIONS=("${OPTIONS[@]/#debug/!debug}")\n' >> /etc/makepkg.conf
+              useradd -m -s /bin/bash anland
+              printf 'anland ALL=(root) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/anland-pacman
+              chmod 0440 /etc/sudoers.d/anland-pacman
+              if grep -q '^#PACMAN_AUTH=()' /etc/makepkg.conf; then
+                sed -i 's/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/' /etc/makepkg.conf
+              else
+                printf '\nPACMAN_AUTH=(sudo)\n' >> /etc/makepkg.conf
+              fi
+              chown anland:anland /output
+
+              source_dir=/home/anland/.cache/anland-source
+              mkdir -p "$source_dir"
+              git init --quiet "$source_dir"
+              git -C "$source_dir" remote add origin "$ANLAND_REPO"
+              git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+              git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+              chown -R anland:anland /home/anland
+              recipe="$source_dir/producers/$WM/Arch_v5"
+              test -f "$recipe/build.sh"
+              test -f "$recipe/startup.sh"
+              for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+              export WM
+              su -m -s /bin/bash anland -c '
+                export HOME=/home/anland
+                export JOBS="$(nproc)" ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0
+                export WORKDIR="$HOME/.cache/anland-$WM-arch-v5"
+                case "$WM" in
+                  denial)
+                    export ARTIFACTS_DIR=/output/artifacts
+                    export ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1
+                    bash "$HOME/.cache/anland-source/producers/denial/Arch_v5/build.sh" --noconfirm
+                    ;;
+                  *)
+                    export ARTIFACTS=/output/artifacts
+                    bash "$HOME/.cache/anland-source/producers/$WM/Arch_v5/build.sh"
+                    ;;
+                esac
+              '
+
+              cd /output/artifacts
+              sha256sum -c SHA256SUMS
+              test -s packages.list
+              case "$WM" in
+                denial)
+                  for file in manifest.env manifest.env.sig packages.list.sig SHA256SUMS.sig denial-local-signing-key.asc; do
+                    test -s "$file"
+                  done
+                  ;;
+                *)
+                  test -s build-inputs.json
+                  test -s anland-local-signing-key.asc
+                  ;;
+              esac
+              found=()
+              while IFS= read -r package; do
+                test -n "$package"
+                test "$package" = "${package##*/}"
+                case "$package" in *.pkg.tar.xz|*.pkg.tar.zst|*.pkg.tar.gz) ;; *) exit 1 ;; esac
+                test -s "$package"
+                test -s "$package.sig"
+                pkgname="$(LC_ALL=C pacman -Qp "$package" | awk 'NR == 1 {print $1}')"
+                found+=("$pkgname")
+              done < packages.list
+              actual="$(printf '%s\n' "${found[@]}" | sort)"
+              case "$WM" in
+                mango) expected="$(printf '%s\n' mango-anland xorg-xwayland | sort)" ;;
+                hyprland) expected="$(printf '%s\n' hyprland-anland hyprpm-anland xorg-xwayland | sort)" ;;
+                denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-xwayland | sort)" ;;
+              esac
+              [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+              chmod -R a+rX /output/artifacts
+              echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM COMMIT=$ANLAND_COMMIT"
+          ANLAND_ARCH_WM_BUILD
+
+      - name: 打包完整产物与构建日志
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$GITHUB_WORKSPACE/.arch-wm-package-build/$WM"
+          (cd "$output_dir/artifacts" && sha256sum -c SHA256SUMS)
+          asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM"
+          mkdir -p "$asset_dir"
+          archive="anland-$WM-arch-aarch64.tar.gz"
+          tar -C "$output_dir" -czf "$asset_dir/$archive" artifacts build.log
+          (cd "$asset_dir" && sha256sum "$archive" > "$archive.sha256")
+          echo "asset_dir=$asset_dir" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: 上传可下载的完整软件包
+        id: upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: anland-${{ matrix.wm }}-package-arch
+          path: ${{ steps.package.outputs.asset_dir }}/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: 取回本次上传的产物
+        uses: actions/download-artifact@v7
+        with:
+          name: anland-${{ matrix.wm }}-package-arch
+          path: ${{ runner.temp }}/anland-${{ matrix.wm }}-download
+
+      - name: 确认产物可下载且完整
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          downloaded="$RUNNER_TEMP/anland-$WM-download"
+          cd "$downloaded"
+          test -s "$ARCHIVE"
+          sha256sum -c "$ARCHIVE.sha256"
+          mkdir unpacked
+          tar -xzf "$ARCHIVE" -C unpacked
+          (cd unpacked/artifacts && sha256sum -c SHA256SUMS)
+          {
+            echo "### $WM Arch ARM64 构建通过"
+            echo "- 来源提交：\`$ANLAND_COMMIT\`"
+            echo "- [下载完整产物]($ARTIFACT_URL)（保存 14 天）"
+            echo '- 归档包含原生包、签名、公钥、packages.list、SHA256SUMS 和构建日志；Mango/Hyprland 附带 build-inputs.json，Denial 附带 manifest.env。'
+            echo '- 已验证上传后能取回；未安装软件包、未运行图形测试。'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 构建失败时保留日志
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: anland-${{ matrix.wm }}-arch-build-log
+          path: .arch-wm-package-build/${{ matrix.wm }}/build.log
+          if-no-files-found: warn
+          retention-days: 7
 
   # ===========================================================================
   # Anland Niri（Arch ARM64）
@@ -469,7 +726,7 @@ jobs:
       - name: 将请求的源解析为单个提交
         id: resolve
         env:
-          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.kde_ref || 'legacy' }}
         shell: bash
         run: |
@@ -497,7 +754,7 @@ jobs:
         target: ${{ fromJson(needs.prepare-kde.outputs.targets) }}
 
     env:
-      ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/superturtlee/anland.git' }}
+      ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/sjszero/anland.git' }}
       ANLAND_COMMIT: ${{ needs.prepare-kde.outputs.anland_commit }}
       BUILD_TARGET: ${{ matrix.target }}
 
@@ -843,7 +1100,7 @@ jobs:
       - name: 创建固定发布与软件包清单
         env:
           GH_TOKEN: ${{ github.token }}
-          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.kde_ref || 'legacy' }}
           ANLAND_COMMIT: ${{ needs.prepare-kde.outputs.anland_commit }}
           BUILD_TARGET_INPUT: ${{ inputs.kde_target || 'all' }}
@@ -1409,7 +1666,7 @@ jobs:
       - name: 将请求的源解析为单个提交
         id: resolve
         env:
-          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.gnome_ref || 'legacy' }}
         shell: bash
         run: |
@@ -1437,7 +1694,7 @@ jobs:
         target: ${{ fromJson(needs.prepare-gnome.outputs.targets) }}
 
     env:
-      ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/superturtlee/anland.git' }}
+      ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/sjszero/anland.git' }}
       ANLAND_COMMIT: ${{ needs.prepare-gnome.outputs.anland_commit }}
       BUILD_TARGET: ${{ matrix.target }}
 
@@ -1721,7 +1978,7 @@ jobs:
       - name: 创建固定发布与软件包清单
         env:
           GH_TOKEN: ${{ github.token }}
-          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.gnome_ref || 'legacy' }}
           ANLAND_COMMIT: ${{ needs.prepare-gnome.outputs.anland_commit }}
           BUILD_TARGET_INPUT: ${{ inputs.gnome_target || 'all' }}
