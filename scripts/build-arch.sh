@@ -32,7 +32,7 @@ log "building the complete Arch Linux ARM package family"
 runuser -u build -- env MAKEFLAGS="-j$(nproc)" \
   bash -c "cd '$work_dir' && makepkg --syncdeps --noconfirm --nocheck --skippgpcheck"
 
-find "$work_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' ! -name '*.sig' \
+find "$work_dir" -maxdepth 1 -type f \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) \
   -exec cp -a {} "$OUTPUT_DIR/" \;
 package_count="$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*.pkg.tar.*' | wc -l)"
 [ "$package_count" -ge 5 ] || die "expected at least 5 pacman packages, got $package_count"

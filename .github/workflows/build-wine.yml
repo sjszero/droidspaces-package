@@ -367,6 +367,10 @@ jobs:
       HANGOVER_COMMIT: ${{ needs.prepare.outputs.hangover_commit }}
       HOVERSION: ${{ needs.prepare.outputs.hangover_version }}
     steps:
+      - name: 检出云编译产物收集脚本
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
       - name: 释放磁盘空间
         shell: bash
         run: |
@@ -762,9 +766,9 @@ jobs:
           set -euo pipefail
 
           output_root="$RUNNER_TEMP/hangover-wine-packages"
-          package_dir="$output_root/$BUILD_TARGET"
+          package_dir="$RUNNER_TEMP/hangover-wine-package-staging/$BUILD_TARGET"
           asset_dir="$GITHUB_WORKSPACE/release-assets"
-          rm -rf "$output_root" "$asset_dir"
+          rm -rf "$output_root" "$package_dir" "$asset_dir"
           mkdir -p "$package_dir" "$asset_dir"
 
           if [ "$PACKAGE_TYPE" = deb ]; then
@@ -786,9 +790,9 @@ jobs:
           else
             native_output="$RUNNER_TEMP/native-package-output/$BUILD_TARGET"
             if [ "$PACKAGE_TYPE" = rpm ]; then
-              mapfile -t native_files < <(find "$native_output" -type f -name '*.rpm' -print)
+              mapfile -t native_files < <(find "$native_output" -type f -name '*.rpm' ! -name '*.src.rpm' ! -name '*.nosrc.rpm' -print)
             else
-              mapfile -t native_files < <(find "$native_output" -type f -name '*.pkg.tar.*' -print)
+              mapfile -t native_files < <(find "$native_output" -type f \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print)
             fi
             if [ "${#native_files[@]}" -ne 1 ]; then
               echo "应当只生成一个原生软件包，实际找到 ${#native_files[@]} 个。" >&2
@@ -797,17 +801,15 @@ jobs:
             cp "${native_files[0]}" "$package_dir/"
           fi
 
+          python3 scripts/package-artifacts.py collect --target "$PACKAGE_TYPE" \
+            --destination "$output_root/$BUILD_TARGET" "$package_dir"
           build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=%s\nhangover_version=%s\nsource_commit=%s\nbuild_time=%s\n' \
-            "$BUILD_TARGET" "$HOVERSION" "$HANGOVER_COMMIT" "$build_time" \
-            > "$package_dir/.hangover-wine-build-info"
           asset_name="hangover-wine-${BUILD_TARGET}-${HOVERSION}-${ASSET_ARCH}.tar.gz"
-          tar -C "$RUNNER_TEMP" -czf "$asset_dir/$asset_name" \
+          tar --mtime="$build_time" -C "$RUNNER_TEMP" -czf "$asset_dir/$asset_name" \
             "hangover-wine-packages/$BUILD_TARGET"
-          test -s "$asset_dir/$asset_name"
+          python3 scripts/package-artifacts.py verify-archive --target "$PACKAGE_TYPE" "$asset_dir/$asset_name"
           echo "asset_path=$asset_dir/$asset_name" >> "$GITHUB_OUTPUT"
           echo "已在 $build_time 创建 $asset_name"
-
       - name: 上传目标软件包归档
         uses: actions/upload-artifact@v6
         with:
@@ -917,10 +919,7 @@ jobs:
           }
 
           archive_build_time() {
-            local archive="$1" target="$2" metadata
-            metadata="$(tar -xOzf "$archive" \
-              "hangover-wine-packages/$target/.hangover-wine-build-info" 2>/dev/null)" || return 1
-            printf '%s\n' "$metadata" | sed -n 's/^build_time=//p' | sed -n '1p'
+            python3 scripts/package-artifacts.py archive-time --target "$2" "$1"
           }
 
           release_exists=false
@@ -1065,7 +1064,6 @@ jobs:
           fi
 
           echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$release_tag"
-
       - name: 同步到 CNB 国内镜像
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
         shell: bash

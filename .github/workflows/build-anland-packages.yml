@@ -1,16 +1,12 @@
 name: 构建 Anland 软件包
 run-name: Anland 软件包 ${{ github.run_number }}
 
-# 四条互相独立的流水线合并在这一个工作流里，各自的发布互不干扰：
-#   kde     —— Anland KDE Wayland（kwin + Xwayland），发布 anland-kde-packages
-#   gnome   —— Anland GNOME Wayland（Mutter + patched Xwayland），发布 anland-gnome-packages
-#   session —— Anland Next session 原生包，发布 anland-session-packages
-#   niri    —— Anland Niri Arch ARM64 包（niri + patched Xwayland），发布 anland-niri-packages
-# 每条流水线由一个布尔开关控制，可以同时打开，构建与上传都并行进行；
-# 关闭的流水线不会产生任何 job，也不会触碰它自己的固定发布。
+# 按桌面/WM 分组：一个构建开关 + 发行版目标；all 构建该 WM 的所有已支持目标。
+# KDE / GNOME / session / Niri Arch 保留固定发布；构建 Artifact 统一只交付原生软件包。
+# 原生 ARM64 容器构建，不安装产物、不启动图形会话；一个目标失败不取消其他目标。
 on:
   schedule:
-    # 每天北京时间 08:00（UTC 00:00）构建全部四套软件包。
+    # 每天北京时间 08:00（UTC 00:00）构建全部已适配目标。
     - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
@@ -36,7 +32,7 @@ on:
         description: KDE 使用的 Anland 仓库地址
         required: true
         type: string
-        default: https://github.com/superturtlee/anland.git
+        default: https://github.com/sjszero/anland.git
       kde_ref:
         description: KDE 使用的 Anland 分支、标签或提交
         required: true
@@ -55,6 +51,8 @@ on:
         default: all
         options:
           - all
+          - Fedora43
+          - Fedora44
           - ubuntu2604
           - Debian13
           - Arch
@@ -62,7 +60,7 @@ on:
         description: GNOME 使用的 Anland 仓库地址
         required: true
         type: string
-        default: https://github.com/superturtlee/anland.git
+        default: https://github.com/sjszero/anland.git
       gnome_ref:
         description: GNOME 使用的 Anland 分支、标签或提交
         required: true
@@ -98,17 +96,93 @@ on:
         default: main
       # —— Anland Niri ——
       build_niri:
-        description: 构建 Anland Niri Arch ARM64 软件包（niri + patched Xwayland）
+        description: 构建 Anland Niri ARM64 软件包（WM + patched Xwayland）
         required: true
         type: boolean
         default: true
+      niri_target:
+        description: Anland Niri 构建目标；all 构建该 WM 的所有已适配发行版
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - Fedora43
+          - Fedora44
+          - ubuntu2604
+          - Debian13
+          - Arch
       niri_repo:
         description: Niri 使用的 Anland 仓库地址
         required: true
         type: string
-        default: https://github.com/SuperTurtleDev/anland.git
+        default: https://github.com/sjszero/anland.git
       niri_ref:
         description: Niri 使用的 Anland 分支、标签或提交
+        required: true
+        type: string
+        default: legacy
+      # —— Anland Mango ——
+      build_mango:
+        description: 构建 Anland Mango ARM64 软件包（WM + patched Xwayland）
+        required: true
+        type: boolean
+        default: true
+      mango_target:
+        description: Anland Mango 构建目标；all 构建该 WM 的所有已适配发行版
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - Fedora43
+          - Fedora44
+          - ubuntu2604
+          - Debian13
+          - Arch
+      # —— Anland Hyprland ——
+      build_hyprland:
+        description: 构建 Anland Hyprland ARM64 软件包（WM + patched Xwayland）
+        required: true
+        type: boolean
+        default: true
+      hyprland_target:
+        description: Anland Hyprland 构建目标；all 构建该 WM 的所有已适配发行版
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - Fedora43
+          - Fedora44
+          - ubuntu2604
+          - Debian13
+          - Arch
+      # —— Anland Denial ——
+      build_denial:
+        description: 构建 Anland Denial ARM64 软件包（WM + patched Xwayland）
+        required: true
+        type: boolean
+        default: true
+      denial_target:
+        description: Anland Denial 构建目标；all 构建该 WM 的所有已适配发行版
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - Fedora43
+          - Fedora44
+          - ubuntu2604
+          - Debian13
+          - Arch
+      wm_repo:
+        description: Mango / Hyprland / Denial 使用的 Anland 仓库地址
+        required: true
+        type: string
+        default: https://github.com/sjszero/anland.git
+      wm_ref:
+        description: Mango / Hyprland / Denial 使用的 Anland 分支、标签或提交
         required: true
         type: string
         default: legacy
@@ -131,54 +205,1399 @@ jobs:
       gnome: ${{ steps.select.outputs.gnome }}
       session: ${{ steps.select.outputs.session }}
       niri: ${{ steps.select.outputs.niri }}
+      niri_targets: ${{ steps.select.outputs.niri_targets }}
+      mango: ${{ steps.select.outputs.mango }}
+      mango_targets: ${{ steps.select.outputs.mango_targets }}
+      hyprland: ${{ steps.select.outputs.hyprland }}
+      hyprland_targets: ${{ steps.select.outputs.hyprland_targets }}
+      denial: ${{ steps.select.outputs.denial }}
+      denial_targets: ${{ steps.select.outputs.denial_targets }}
     steps:
-      - name: 选择要构建的流水线
-        id: select
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          KDE_INPUT: ${{ inputs.build_kde }}
-          GNOME_INPUT: ${{ inputs.build_gnome }}
-          SESSION_INPUT: ${{ inputs.build_session }}
-          NIRI_INPUT: ${{ inputs.build_niri }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # 定时构建始终构建全部四套软件包；手动触发按各自的布尔开关选择。
-          if [ "$EVENT_NAME" = schedule ]; then
-            kde=true
-            gnome=true
-            session=true
-            niri=true
-          else
-            kde="${KDE_INPUT:-false}"
-            gnome="${GNOME_INPUT:-false}"
-            session="${SESSION_INPUT:-false}"
-            niri="${NIRI_INPUT:-false}"
-          fi
-
-          enabled=()
-          for entry in "kde=$kde" "gnome=$gnome" "session=$session" "niri=$niri"; do
-            if [ "${entry#*=}" = true ]; then
-              enabled+=("${entry%%=*}")
+    - name: 按 WM 开关及发行版目标生成矩阵
+      id: select
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        KDE_INPUT: ${{ inputs.build_kde }}
+        GNOME_INPUT: ${{ inputs.build_gnome }}
+        SESSION_INPUT: ${{ inputs.build_session }}
+        NIRI_INPUT: ${{ inputs.build_niri }}
+        MANGO_INPUT: ${{ inputs.build_mango }}
+        HYPRLAND_INPUT: ${{ inputs.build_hyprland }}
+        DENIAL_INPUT: ${{ inputs.build_denial }}
+        NIRI_TARGET: ${{ inputs.niri_target || 'all' }}
+        MANGO_TARGET: ${{ inputs.mango_target || 'all' }}
+        HYPRLAND_TARGET: ${{ inputs.hyprland_target || 'all' }}
+        DENIAL_TARGET: ${{ inputs.denial_target || 'all' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 - <<'PY_SELECT'
+        import json, os
+        scheduled = os.environ['EVENT_NAME'] == 'schedule'
+        supported = {
+            'niri': ['ubuntu2604', 'Debian13', 'Fedora43', 'Fedora44', 'Arch'],
+            'mango': ['ubuntu2604', 'Debian13', 'Fedora43', 'Fedora44', 'Arch'],
+            'hyprland': ['ubuntu2604', 'Debian13', 'Fedora43', 'Fedora44', 'Arch'],
+            'denial': ['ubuntu2604', 'Debian13', 'Fedora43', 'Fedora44', 'Arch'],
+        }
+        enabled = {wm: scheduled or os.environ.get(wm.upper() + '_INPUT', 'false') == 'true'
+                   for wm in ('kde', 'gnome', 'session', *supported)}
+        if not any(enabled.values()):
+            raise SystemExit('没有选择任何构建目标；请至少打开一个构建开关。')
+        outputs = {wm: str(value).lower() for wm, value in enabled.items()}
+        for wm, available in supported.items():
+            requested = 'all' if scheduled else os.environ.get(wm.upper() + '_TARGET', 'all')
+            if requested not in ['all', *available]:
+                raise SystemExit(f'不支持的 {wm} 构建目标：{requested}')
+            targets = (available if requested == 'all' else [requested]) if enabled[wm] else []
+            outputs[wm + '_targets'] = json.dumps(targets, separators=(',', ':'))
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+            for name, value in outputs.items():
+                print(f'{name}={value}', file=f)
+        print('本次构建：', ', '.join(wm for wm, value in enabled.items() if value))
+        for wm in supported:
+            print(wm + ' 矩阵：', outputs[wm + '_targets'])
+        PY_SELECT
+  # ==========================================================================
+  # Anland Mango（独立 WM job，发行版在内部展开矩阵）
+  # ==========================================================================
+  prepare-mango:
+    name: 解析 Anland Mango 源码版本（各发行版共用同一提交）
+    needs: select
+    if: ${{ needs.select.outputs.mango == 'true' }}
+    runs-on: ubuntu-26.04
+    outputs:
+      anland_commit: ${{ steps.resolve.outputs.anland_commit }}
+      targets: ${{ needs.select.outputs.mango_targets }}
+    steps:
+    - name: 要求从 main 分支触发
+      shell: bash
+      run: |
+        if [ "$GITHUB_REF_NAME" != main ]; then
+          echo "此工作流必须从 main 分支触发。" >&2
+          exit 1
+        fi
+    - name: 将请求的源解析为单个提交
+      id: resolve
+      env:
+        ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+        ANLAND_REF: ${{ inputs.wm_ref || 'legacy' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_dir="$RUNNER_TEMP/anland-mango-source"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_REF"
+        anland_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
+        git -C "$source_dir" cat-file -e "${anland_commit}^{commit}"
+        echo "anland_commit=$anland_commit" >> "$GITHUB_OUTPUT"
+        echo "已将 $ANLAND_REPO @ $ANLAND_REF 解析为 $anland_commit"
+  build-mango:
+    name: 构建 Mango ${{ matrix.target }} ARM64 软件包
+    needs: prepare-mango
+    if: ${{ needs.prepare-mango.result == 'success' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.prepare-mango.outputs.targets) }}
+    env:
+      WM: mango
+      TARGET: ${{ matrix.target }}
+      ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+      ANLAND_COMMIT: ${{ needs.prepare-mango.outputs.anland_commit }}
+    steps:
+    - name: 检出云编译产物收集脚本
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+    - name: 解析 WM 发行版目标
+      id: target
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TARGET" in
+          Arch) slug=arch; arch=aarch64 ;;
+          Fedora43) slug=fedora43; arch=aarch64 ;;
+          Fedora44) slug=fedora44; arch=aarch64 ;;
+          Debian13) slug=debian13; arch=arm64 ;;
+          ubuntu2604) slug=ubuntu2604; arch=arm64 ;;
+          *) echo "不支持的构建目标：$TARGET" >&2; exit 1 ;;
+        esac
+        echo "slug=$slug" >> "$GITHUB_OUTPUT"
+        echo "arch=$arch" >> "$GITHUB_OUTPUT"
+    - name: 在 Fedora ARM64 中构建（匹配发行版源码和 ABI）
+      if: ${{ matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT -e FEDORA_VERSION \
+          -v "$output_dir:/output" "fedora:$FEDORA_VERSION" bash -s <<'FEDORA_BUILD' 2>&1 | tee "$output_dir/build.log"
+        set -euo pipefail
+        : "${WM:?}" "${ANLAND_REPO:?}" "${ANLAND_COMMIT:?}"
+        case "$WM" in denial|gnome|hyprland|mango|niri) ;; *) echo "Unknown WM: $WM" >&2; exit 1 ;; esac
+        [[ $(uname -m) == aarch64 && $(id -u) == 0 ]] || { echo 'requires an ARM64 Fedora CI container' >&2; exit 1; }
+        source /etc/os-release
+        [[ $ID == fedora && $VERSION_ID == "$FEDORA_VERSION" ]] || exit 1
+        dnf --setopt=install_weak_deps=False install -y git-core ca-certificates curl sudo \
+            python3 util-linux rpm-build rpmdevtools dnf5-plugins tar xz findutils shadow-utils
+        useradd -m -s /bin/bash anland
+        printf 'anland ALL=(root) NOPASSWD: /usr/bin/dnf\n' > /etc/sudoers.d/anland-dnf
+        chmod 0440 /etc/sudoers.d/anland-dnf
+        source_dir=/home/anland/.cache/anland-source
+        mkdir -p "$source_dir"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+        git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+        [[ $(git -C "$source_dir" rev-parse HEAD) == "$ANLAND_COMMIT" ]]
+        recipe="$source_dir/producers/$WM/Fedora${FEDORA_VERSION}_v5"
+        test -s "$recipe/dependencies.lock"
+        for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+        chown -R anland:anland /home/anland
+        mkdir -p /output
+        output_owner=$(stat -c '%u:%g' /output)
+        restore_output_owner() {
+            local build_rc=$?
+            trap - EXIT
+            if ! chown -Rh -- "$output_owner" /output; then
+                printf 'Failed to restore output ownership to %s\n' "$output_owner" >&2
+                if [[ $build_rc == 0 ]]; then build_rc=1; fi
             fi
-          done
-          if [ "${#enabled[@]}" -eq 0 ]; then
-            echo "没有选择任何构建目标；请至少打开一个构建开关。" >&2
-            exit 1
-          fi
+            exit "$build_rc"
+        }
+        trap restore_output_owner EXIT
+        chown anland:anland /output
+        runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+            ANLAND_INSTALL=0 ANLAND_STAGE=build ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+            ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+            WORKDIR="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5" \
+            ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+        cd /output/artifacts
+        package_list="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/packages.list"
+        checksums="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/SHA256SUMS"
+        [[ -s $package_list ]] || package_list=/output/artifacts/packages.list
+        [[ -s $checksums ]] || checksums=/output/artifacts/SHA256SUMS
+        test -s "$package_list"
+        sha256sum -c "$checksums"
+        found=()
+        while IFS= read -r package; do
+            [[ $package == "${package##*/}" && $package == *.rpm && -s $package ]]
+            architecture=$(rpm -qp --qf '%{ARCH}' "$package")
+            [[ $architecture == aarch64 || $architecture == noarch ]]
+            rpm -K "$package"
+            found+=("$(rpm -qp --qf '%{NAME}' "$package")")
+        done < "$package_list"
+        actual=$(printf '%s\n' "${found[@]}" | sort)
+        case "$WM" in
+            mango) expected=$(printf '%s\n' mango-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            hyprland) expected=$(printf '%s\n' hyprland-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            denial) expected=$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            niri) expected=$(printf '%s\n' niri-anland xwayland-satellite xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            gnome) expected=$(printf '%s\n' mutter mutter-common mutter-devel xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+        esac
+        [[ $actual == "$expected" ]] || { printf 'Incomplete Fedora package set:\n%s\nExpected:\n%s\n' "$actual" "$expected" >&2; exit 1; }
+        chmod -R a+rX /output/artifacts
+        printf 'RUNNER_BUILD_ARTIFACTS_OK WM=%s DISTRO=fedora%s COMMIT=%s\n' "$WM" "$FEDORA_VERSION" "$ANLAND_COMMIT"
+        FEDORA_BUILD
+      env:
+        FEDORA_VERSION: ${{ matrix.target == 'Fedora44' && '44' || '43' }}
+    - name: 在 Arch Linux ARM 中构建
+      if: ${{ matrix.target == 'Arch' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        # 挂载父目录而不是 ARTIFACTS 本身，允许 build.sh 原子交换产物目录。
+        docker run --rm -i \
+          --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" \
+          ogarcia/archlinux:latest \
+          bash -s <<'ANLAND_ARCH_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial) ;; *) echo "未知的 WM：$WM" >&2; exit 1 ;; esac
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed base-devel git ca-certificates sudo \
+              python gnupg cmake meson ninja pkgconf patchelf
+            # Denial 使用系统原生 Ninja，避开锁定 depot_tools 的旧 Python wrapper。
+            # 完整 engine/desktop 依赖由其 build.sh 的 ANLAND_WITH_DEPS=1 安装。
+            if [ "$WM" = denial ]; then
+              /usr/bin/ninja --version
+              python3 --version
+            fi
+            # 只交付运行时包，避免 Arch 默认 debug 分包混入预期的软件包集合。
+            printf '\nOPTIONS=("${OPTIONS[@]/#debug/!debug}")\n' >> /etc/makepkg.conf
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/anland-pacman
+            chmod 0440 /etc/sudoers.d/anland-pacman
+            if grep -q '^#PACMAN_AUTH=()' /etc/makepkg.conf; then
+              sed -i 's/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/' /etc/makepkg.conf
+            else
+              printf '\nPACMAN_AUTH=(sudo)\n' >> /etc/makepkg.conf
+            fi
+            chown anland:anland /output
 
-          {
-            echo "kde=$kde"
-            echo "gnome=$gnome"
-            echo "session=$session"
-            echo "niri=$niri"
-          } >> "$GITHUB_OUTPUT"
-          echo "本次构建：${enabled[*]}"
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            chown -R anland:anland /home/anland
+            recipe="$source_dir/producers/$WM/Arch_v5"
+            test -f "$recipe/build.sh"
+            test -f "$recipe/startup.sh"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            export WM
+            su -m -s /bin/bash anland -c '
+              export HOME=/home/anland
+              export JOBS="$(nproc)" ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0
+              export WORKDIR="$HOME/.cache/anland-$WM-arch-v5"
+              case "$WM" in
+                denial)
+                  export ARTIFACTS_DIR=/output/artifacts
+                  export ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1
+                  bash "$HOME/.cache/anland-source/producers/denial/Arch_v5/build.sh" --noconfirm
+                  ;;
+                *)
+                  export ARTIFACTS=/output/artifacts
+                  bash "$HOME/.cache/anland-source/producers/$WM/Arch_v5/build.sh"
+                  ;;
+              esac
+            '
 
-  # ===========================================================================
-  # Anland Niri（Arch ARM64）
-  # ===========================================================================
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.pkg.tar.xz *.pkg.tar.zst *.pkg.tar.gz)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              architecture=$(bsdtar -xOf "$package" .PKGINFO | awk '$1 == "arch" {print $3}')
+              [[ $architecture == aarch64 || $architecture == any ]]
+              found+=("$(LC_ALL=C pacman -Qp "$package" | awk 'NR == 1 {print $1}')")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xorg-xwayland | sort)" ;;
+              hyprland) expected="$(printf '%s\n' hyprland-anland hyprpm-anland xorg-xwayland | sort)" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM COMMIT=$ANLAND_COMMIT"
+        ANLAND_ARCH_WM_BUILD
+    - name: 在 Debian 13 ARM64 中构建
+      if: ${{ matrix.target == 'Debian13' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i \
+          --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" \
+          debian:trixie \
+          bash -s <<'ANLAND_DEBIAN_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland) ;; *) echo "未知的 WM：$WM" >&2; exit 1 ;; esac
+            export DEBIAN_FRONTEND=noninteractive
+            # 仅限制一次性 CI 容器里的依赖安装，禁止 postinst 启动服务。
+            printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+            chmod 0755 /usr/sbin/policy-rc.d
+            if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+              sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+            else
+              printf 'deb-src http://deb.debian.org/debian trixie main\n' \
+                > /etc/apt/sources.list.d/anland-trixie-source.list
+            fi
+            # 最小 Debian 镜像尚无 CA 包；APT 使用签名校验，先沿用官方 HTTP 源。
+            printf 'deb http://deb.debian.org/debian trixie-backports main\ndeb-src http://deb.debian.org/debian trixie-backports main\n' \
+              > /etc/apt/sources.list.d/anland-backports.list
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              git ca-certificates curl build-essential cmake meson ninja-build pkgconf \
+              ccache python3 dpkg-dev debhelper fakeroot quilt patch xz-utils zstd \
+              unzip gettext file binutils libpipewire-0.3-dev
+
+            useradd -m -s /bin/bash anland
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            recipe="$source_dir/producers/$WM/Debian13_v5"
+            test -s "$recipe/dependencies.lock"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            if [ "$WM" = mango ]; then
+              xwayland_version="$(awk '$1 == "deb" && $2 == "xwayland" {print $3}' "$recipe/dependencies.lock")"
+            else
+              xwayland_version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["xwayland"]["version"])' "$recipe/dependencies.lock")"
+            fi
+            test -n "$xwayland_version"
+            # Xwayland 使用两个配方各自的锁定源码，不继承 WM 的私有库环境。
+            apt-get build-dep -y --no-install-recommends "xwayland=$xwayland_version"
+            case "$WM" in
+              mango)
+                # wlroots 读取 xwayland.pc；它属于 xwayland 二进制包，
+                # apt-get build-dep 只装构建依赖，不会安装该包自身。
+                # 此处仅准备 CI 依赖，最终仍由配方编译、打包修补版 Xwayland。
+                apt-get install -y --no-install-recommends -t trixie-backports \
+                  "xwayland=$xwayland_version" \
+                  libinput-dev libudev-dev libseat-dev libdisplay-info-dev libliftoff-dev \
+                  libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libvulkan-dev glslang-tools \
+                  libpcre2-dev libcjson-dev libpango1.0-dev libpixman-1-dev libwayland-dev \
+                  libdrm-dev libxkbcommon-dev libffi-dev libexpat1-dev libxml2-dev bison \
+                  libxcb1-dev libxcb-render0-dev libxcb-randr0-dev libxcb-xfixes0-dev \
+                  libxcb-icccm4-dev libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev \
+                  libxcb-res0-dev libxcb-shape0-dev libxcb-shm0-dev xkb-data hwdata wayland-protocols
+                # 按锁定源码启用的功能预检系统依赖，避免私有依赖编译后才报遗漏。
+                # 新版 Wayland/libdrm/xkbcommon/pixman/protocols 由 bootstrap 提供，
+                # 不能在这里用 Debian 的旧版本代替或要求其满足私有版本下限。
+                xwayland_upstream="${xwayland_version#*:}"
+                system_deps=(
+                  libpipewire-0.3 libffi expat libxml-2.0
+                  egl 'gbm >= 21.1' glesv2 libudev 'libseat >= 0.2.0' hwdata
+                  'libdisplay-info >= 0.2.0' 'libinput >= 1.27.1'
+                  libpcre2-8 libcjson pangocairo "xwayland = ${xwayland_upstream%-*}"
+                  xcb xcb-composite xcb-ewmh xcb-icccm xcb-render
+                  xcb-res 'xcb-xfixes >= 1.15' xcb-randr
+                )
+                pkg-config --print-errors --exists "${system_deps[@]}"
+                for dependency in "${system_deps[@]}"; do
+                  printf 'MANGO_SYSTEM_DEP %s: ' "$dependency"
+                  pkg-config --modversion "$dependency"
+                done
+                for tool in bison glslang; do command -v "$tool"; done
+                test -s "$(pkg-config --variable=pkgdatadir hwdata)/pnp.ids"
+                test -x "$(pkg-config --variable=xwayland xwayland)"
+                echo 'MANGO_SYSTEM_BUILD_DEPENDENCIES_OK'
+                # Mango 的 ANLAND_WITH_DEPS=1 从 lockfile 构建新版私有图形依赖，
+                # 不是 Arch 配方的 pacman 安装开关；不能在干净 Debian worker 上省略。
+                ;;
+              hyprland)
+                python3 -c 'import json, sys; lock=json.load(open(sys.argv[1])); print("\n".join(name + "=" + entry["version"] for name, entry in lock["sources"].items()))' \
+                  "$recipe/dependencies.lock" > /home/anland/.cache/hyprland-build-deps.list
+                mapfile -t locked_sources < /home/anland/.cache/hyprland-build-deps.list
+                test "${#locked_sources[@]}" -eq 5
+                apt-get build-dep -y --no-install-recommends -t trixie-backports "${locked_sources[@]}"
+                # Hyprgrass/wf-touch 不属于 Debian 源包的 Build-Depends。
+                apt-get install -y --no-install-recommends libglm-dev libevdev-dev
+                ;;
+            esac
+            chown -R anland:anland /home/anland
+            chown anland:anland /output
+            # Debian 入口固定输出到 recipe/artifacts；普通用户编译后再收集。
+            runuser -u anland -- env HOME=/home/anland \
+              JOBS="$(nproc)" ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-debian13-v5" \
+              bash "$recipe/build.sh"
+
+            mkdir -p /output/artifacts
+            install -m644 "$recipe/artifacts/"*.deb "$recipe/artifacts/SHA256SUMS" \
+              "$recipe/dependencies.lock" /output/artifacts/
+            cd /output/artifacts
+            sha256sum -c SHA256SUMS
+            packages=(*.deb)
+            found=()
+            for package in "${packages[@]}"; do
+              test -s "$package"
+              [ "$(dpkg-deb -f "$package" Architecture)" = arm64 ]
+              found+=("$(dpkg-deb -f "$package" Package)")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xwayland | sort)" ;;
+              hyprland)
+                expected="$(python3 -c 'import json, sys; lock=json.load(open(sys.argv[1])); print("\n".join(sorted([*lock["runtime_packages"].values(), "xwayland"])))' "$recipe/dependencies.lock")"
+                ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            printf '%s\n' "${packages[@]}" > packages.list
+            python3 - <<'PY_BUILD_INPUTS' > build-inputs.json
+        import json, os
+        print(json.dumps({
+            'schema_version': 1, 'repository': os.environ['ANLAND_REPO'],
+            'commit': os.environ['ANLAND_COMMIT'],
+            'recipe': 'producers/' + os.environ['WM'] + '/Debian13_v5',
+            'distribution': 'debian13', 'architecture': 'arm64',
+            'install_artifacts': False, 'graphical_test': False,
+        }, ensure_ascii=False, indent=2))
+        PY_BUILD_INPUTS
+            sha256sum "${packages[@]}" packages.list dependencies.lock build-inputs.json > SHA256SUMS
+            sha256sum -c SHA256SUMS
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM DISTRO=debian13 COMMIT=$ANLAND_COMMIT"
+        ANLAND_DEBIAN_WM_BUILD
+    - name: 在 Ubuntu 26.04 ARM64 中构建
+      if: ${{ matrix.target == 'ubuntu2604' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" ubuntu:26.04 \
+          bash -s <<'ANLAND_UBUNTU_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial|niri) ;; *) echo "未知 WM：$WM" >&2; exit 1 ;; esac
+            export DEBIAN_FRONTEND=noninteractive
+            printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+            chmod 0755 /usr/sbin/policy-rc.d
+            test -f /etc/apt/sources.list.d/ubuntu.sources
+            sed -i -e 's/^Types: deb$/Types: deb deb-src/' \
+              -e 's/^Components:.*/Components: main restricted universe multiverse/' \
+              /etc/apt/sources.list.d/ubuntu.sources
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates curl sudo python3 util-linux
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/sed\n' > /etc/sudoers.d/anland-apt
+            chmod 0440 /etc/sudoers.d/anland-apt
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            recipe="$source_dir/producers/$WM/Ubuntu2604_v5"
+            test -s "$recipe/dependencies.lock"
+            test -s "$recipe/xwayland.lock"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            chown -R anland:anland /home/anland
+            chown anland:anland /output
+            runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+              ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+              ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-ubuntu2604-v5" \
+              ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.deb)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              [ "$(dpkg-deb -f "$package" Architecture)" = arm64 ]
+              found+=("$(dpkg-deb -f "$package" Package)")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xwayland | sort)" ;;
+              hyprland) expected="$(python3 -c 'import json,sys; lock=json.load(open(sys.argv[1])); print("\n".join(sorted([*lock["runtime_packages"].values(),"xwayland"])))' "$recipe/dependencies.lock")" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xwayland | sort)" ;;
+              niri) expected="$(printf '%s\n' niri-anland xwayland-satellite xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM DISTRO=ubuntu2604 COMMIT=$ANLAND_COMMIT"
+        ANLAND_UBUNTU_WM_BUILD
+    - name: 只收集成品原生软件包
+      id: package
+      env:
+        SLUG: ${{ steps.target.outputs.slug }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        python3 scripts/package-artifacts.py collect --target "$TARGET" \
+          --destination "$asset_dir" "$output_dir/artifacts"
+        echo "asset_dir=$asset_dir" >> "$GITHUB_OUTPUT"
+    - name: 上传可下载的完整软件包
+      id: upload
+      uses: actions/upload-artifact@v6
+      with:
+        name: anland-mango-package-${{ steps.target.outputs.slug }}
+        path: ${{ steps.package.outputs.asset_dir }}/*
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 14
+    - name: 取回本次上传的完整产物
+      uses: actions/download-artifact@v7
+      with:
+        name: anland-mango-package-${{ steps.target.outputs.slug }}
+        path: ${{ runner.temp }}/anland-mango-${{ steps.target.outputs.slug }}-download
+    - name: 确认上传后只有目标软件包且字节一致
+      env:
+        SLUG: ${{ steps.target.outputs.slug }}
+        ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        download_dir="$RUNNER_TEMP/anland-$WM-$SLUG-download"
+        python3 scripts/package-artifacts.py verify --target "$TARGET" "$asset_dir" "$download_dir"
+        {
+          echo "### $WM $TARGET ARM64 构建通过"
+          echo "- 来源提交：\`$ANLAND_COMMIT\`"
+          echo "- [下载成品软件包]($ARTIFACT_URL)（保存 14 天）"
+          echo '- 下载产物仅包含原生软件包，无签名、校验清单、密钥、构建元数据或日志。'
+          echo '- 已逐包比对上传后取回的字节；未安装产物、未运行图形测试。'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: 构建失败时在控制台显示日志结尾
+      if: ${{ failure() }}
+      shell: bash
+      run: |
+        tail -n 80 "$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET/build.log" || true
+  prepare-hyprland:
+    name: 解析 Anland Hyprland 源码版本（各发行版共用同一提交）
+    needs: select
+    if: ${{ needs.select.outputs.hyprland == 'true' }}
+    runs-on: ubuntu-26.04
+    outputs:
+      anland_commit: ${{ steps.resolve.outputs.anland_commit }}
+      targets: ${{ needs.select.outputs.hyprland_targets }}
+    steps:
+    - name: 要求从 main 分支触发
+      shell: bash
+      run: |
+        if [ "$GITHUB_REF_NAME" != main ]; then
+          echo "此工作流必须从 main 分支触发。" >&2
+          exit 1
+        fi
+    - name: 将请求的源解析为单个提交
+      id: resolve
+      env:
+        ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+        ANLAND_REF: ${{ inputs.wm_ref || 'legacy' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_dir="$RUNNER_TEMP/anland-hyprland-source"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_REF"
+        anland_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
+        git -C "$source_dir" cat-file -e "${anland_commit}^{commit}"
+        echo "anland_commit=$anland_commit" >> "$GITHUB_OUTPUT"
+        echo "已将 $ANLAND_REPO @ $ANLAND_REF 解析为 $anland_commit"
+  build-hyprland:
+    name: 构建 Hyprland ${{ matrix.target }} ARM64 软件包
+    needs: prepare-hyprland
+    if: ${{ needs.prepare-hyprland.result == 'success' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.prepare-hyprland.outputs.targets) }}
+    env:
+      WM: hyprland
+      TARGET: ${{ matrix.target }}
+      ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+      ANLAND_COMMIT: ${{ needs.prepare-hyprland.outputs.anland_commit }}
+    steps:
+    - name: 检出云编译产物收集脚本
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+    - name: 解析 WM 发行版目标
+      id: target
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TARGET" in
+          Arch) slug=arch; arch=aarch64 ;;
+          Fedora43) slug=fedora43; arch=aarch64 ;;
+          Fedora44) slug=fedora44; arch=aarch64 ;;
+          Debian13) slug=debian13; arch=arm64 ;;
+          ubuntu2604) slug=ubuntu2604; arch=arm64 ;;
+          *) echo "不支持的构建目标：$TARGET" >&2; exit 1 ;;
+        esac
+        echo "slug=$slug" >> "$GITHUB_OUTPUT"
+        echo "arch=$arch" >> "$GITHUB_OUTPUT"
+    - name: 在 Fedora ARM64 中构建（匹配发行版源码和 ABI）
+      if: ${{ matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT -e FEDORA_VERSION \
+          -v "$output_dir:/output" "fedora:$FEDORA_VERSION" bash -s <<'FEDORA_BUILD' 2>&1 | tee "$output_dir/build.log"
+        set -euo pipefail
+        : "${WM:?}" "${ANLAND_REPO:?}" "${ANLAND_COMMIT:?}"
+        case "$WM" in denial|gnome|hyprland|mango|niri) ;; *) echo "Unknown WM: $WM" >&2; exit 1 ;; esac
+        [[ $(uname -m) == aarch64 && $(id -u) == 0 ]] || { echo 'requires an ARM64 Fedora CI container' >&2; exit 1; }
+        source /etc/os-release
+        [[ $ID == fedora && $VERSION_ID == "$FEDORA_VERSION" ]] || exit 1
+        dnf --setopt=install_weak_deps=False install -y git-core ca-certificates curl sudo \
+            python3 util-linux rpm-build rpmdevtools dnf5-plugins tar xz findutils shadow-utils
+        useradd -m -s /bin/bash anland
+        printf 'anland ALL=(root) NOPASSWD: /usr/bin/dnf\n' > /etc/sudoers.d/anland-dnf
+        chmod 0440 /etc/sudoers.d/anland-dnf
+        source_dir=/home/anland/.cache/anland-source
+        mkdir -p "$source_dir"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+        git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+        [[ $(git -C "$source_dir" rev-parse HEAD) == "$ANLAND_COMMIT" ]]
+        recipe="$source_dir/producers/$WM/Fedora${FEDORA_VERSION}_v5"
+        test -s "$recipe/dependencies.lock"
+        for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+        chown -R anland:anland /home/anland
+        mkdir -p /output
+        output_owner=$(stat -c '%u:%g' /output)
+        restore_output_owner() {
+            local build_rc=$?
+            trap - EXIT
+            if ! chown -Rh -- "$output_owner" /output; then
+                printf 'Failed to restore output ownership to %s\n' "$output_owner" >&2
+                if [[ $build_rc == 0 ]]; then build_rc=1; fi
+            fi
+            exit "$build_rc"
+        }
+        trap restore_output_owner EXIT
+        chown anland:anland /output
+        runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+            ANLAND_INSTALL=0 ANLAND_STAGE=build ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+            ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+            WORKDIR="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5" \
+            ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+        cd /output/artifacts
+        package_list="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/packages.list"
+        checksums="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/SHA256SUMS"
+        [[ -s $package_list ]] || package_list=/output/artifacts/packages.list
+        [[ -s $checksums ]] || checksums=/output/artifacts/SHA256SUMS
+        test -s "$package_list"
+        sha256sum -c "$checksums"
+        found=()
+        while IFS= read -r package; do
+            [[ $package == "${package##*/}" && $package == *.rpm && -s $package ]]
+            architecture=$(rpm -qp --qf '%{ARCH}' "$package")
+            [[ $architecture == aarch64 || $architecture == noarch ]]
+            rpm -K "$package"
+            found+=("$(rpm -qp --qf '%{NAME}' "$package")")
+        done < "$package_list"
+        actual=$(printf '%s\n' "${found[@]}" | sort)
+        case "$WM" in
+            mango) expected=$(printf '%s\n' mango-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            hyprland) expected=$(printf '%s\n' hyprland-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            denial) expected=$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            niri) expected=$(printf '%s\n' niri-anland xwayland-satellite xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            gnome) expected=$(printf '%s\n' mutter mutter-common mutter-devel xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+        esac
+        [[ $actual == "$expected" ]] || { printf 'Incomplete Fedora package set:\n%s\nExpected:\n%s\n' "$actual" "$expected" >&2; exit 1; }
+        chmod -R a+rX /output/artifacts
+        printf 'RUNNER_BUILD_ARTIFACTS_OK WM=%s DISTRO=fedora%s COMMIT=%s\n' "$WM" "$FEDORA_VERSION" "$ANLAND_COMMIT"
+        FEDORA_BUILD
+      env:
+        FEDORA_VERSION: ${{ matrix.target == 'Fedora44' && '44' || '43' }}
+    - name: 在 Arch Linux ARM 中构建
+      if: ${{ matrix.target == 'Arch' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        # 挂载父目录而不是 ARTIFACTS 本身，允许 build.sh 原子交换产物目录。
+        docker run --rm -i \
+          --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" \
+          ogarcia/archlinux:latest \
+          bash -s <<'ANLAND_ARCH_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial) ;; *) echo "未知的 WM：$WM" >&2; exit 1 ;; esac
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed base-devel git ca-certificates sudo \
+              python gnupg cmake meson ninja pkgconf patchelf
+            # Denial 使用系统原生 Ninja，避开锁定 depot_tools 的旧 Python wrapper。
+            # 完整 engine/desktop 依赖由其 build.sh 的 ANLAND_WITH_DEPS=1 安装。
+            if [ "$WM" = denial ]; then
+              /usr/bin/ninja --version
+              python3 --version
+            fi
+            # 只交付运行时包，避免 Arch 默认 debug 分包混入预期的软件包集合。
+            printf '\nOPTIONS=("${OPTIONS[@]/#debug/!debug}")\n' >> /etc/makepkg.conf
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/anland-pacman
+            chmod 0440 /etc/sudoers.d/anland-pacman
+            if grep -q '^#PACMAN_AUTH=()' /etc/makepkg.conf; then
+              sed -i 's/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/' /etc/makepkg.conf
+            else
+              printf '\nPACMAN_AUTH=(sudo)\n' >> /etc/makepkg.conf
+            fi
+            chown anland:anland /output
+
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            chown -R anland:anland /home/anland
+            recipe="$source_dir/producers/$WM/Arch_v5"
+            test -f "$recipe/build.sh"
+            test -f "$recipe/startup.sh"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            export WM
+            su -m -s /bin/bash anland -c '
+              export HOME=/home/anland
+              export JOBS="$(nproc)" ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0
+              export WORKDIR="$HOME/.cache/anland-$WM-arch-v5"
+              case "$WM" in
+                denial)
+                  export ARTIFACTS_DIR=/output/artifacts
+                  export ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1
+                  bash "$HOME/.cache/anland-source/producers/denial/Arch_v5/build.sh" --noconfirm
+                  ;;
+                *)
+                  export ARTIFACTS=/output/artifacts
+                  bash "$HOME/.cache/anland-source/producers/$WM/Arch_v5/build.sh"
+                  ;;
+              esac
+            '
+
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.pkg.tar.xz *.pkg.tar.zst *.pkg.tar.gz)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              architecture=$(bsdtar -xOf "$package" .PKGINFO | awk '$1 == "arch" {print $3}')
+              [[ $architecture == aarch64 || $architecture == any ]]
+              found+=("$(LC_ALL=C pacman -Qp "$package" | awk 'NR == 1 {print $1}')")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xorg-xwayland | sort)" ;;
+              hyprland) expected="$(printf '%s\n' hyprland-anland hyprpm-anland xorg-xwayland | sort)" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM COMMIT=$ANLAND_COMMIT"
+        ANLAND_ARCH_WM_BUILD
+    - name: 在 Debian 13 ARM64 中构建
+      if: ${{ matrix.target == 'Debian13' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i \
+          --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" \
+          debian:trixie \
+          bash -s <<'ANLAND_DEBIAN_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland) ;; *) echo "未知的 WM：$WM" >&2; exit 1 ;; esac
+            export DEBIAN_FRONTEND=noninteractive
+            # 仅限制一次性 CI 容器里的依赖安装，禁止 postinst 启动服务。
+            printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+            chmod 0755 /usr/sbin/policy-rc.d
+            if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+              sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+            else
+              printf 'deb-src http://deb.debian.org/debian trixie main\n' \
+                > /etc/apt/sources.list.d/anland-trixie-source.list
+            fi
+            # 最小 Debian 镜像尚无 CA 包；APT 使用签名校验，先沿用官方 HTTP 源。
+            printf 'deb http://deb.debian.org/debian trixie-backports main\ndeb-src http://deb.debian.org/debian trixie-backports main\n' \
+              > /etc/apt/sources.list.d/anland-backports.list
+            apt-get update
+            apt-get install -y --no-install-recommends \
+              git ca-certificates curl build-essential cmake meson ninja-build pkgconf \
+              ccache python3 dpkg-dev debhelper fakeroot quilt patch xz-utils zstd \
+              unzip gettext file binutils libpipewire-0.3-dev
+
+            useradd -m -s /bin/bash anland
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            recipe="$source_dir/producers/$WM/Debian13_v5"
+            test -s "$recipe/dependencies.lock"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            if [ "$WM" = mango ]; then
+              xwayland_version="$(awk '$1 == "deb" && $2 == "xwayland" {print $3}' "$recipe/dependencies.lock")"
+            else
+              xwayland_version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["xwayland"]["version"])' "$recipe/dependencies.lock")"
+            fi
+            test -n "$xwayland_version"
+            # Xwayland 使用两个配方各自的锁定源码，不继承 WM 的私有库环境。
+            apt-get build-dep -y --no-install-recommends "xwayland=$xwayland_version"
+            case "$WM" in
+              mango)
+                # wlroots 读取 xwayland.pc；它属于 xwayland 二进制包，
+                # apt-get build-dep 只装构建依赖，不会安装该包自身。
+                # 此处仅准备 CI 依赖，最终仍由配方编译、打包修补版 Xwayland。
+                apt-get install -y --no-install-recommends -t trixie-backports \
+                  "xwayland=$xwayland_version" \
+                  libinput-dev libudev-dev libseat-dev libdisplay-info-dev libliftoff-dev \
+                  libgbm-dev libegl1-mesa-dev libgles2-mesa-dev libvulkan-dev glslang-tools \
+                  libpcre2-dev libcjson-dev libpango1.0-dev libpixman-1-dev libwayland-dev \
+                  libdrm-dev libxkbcommon-dev libffi-dev libexpat1-dev libxml2-dev bison \
+                  libxcb1-dev libxcb-render0-dev libxcb-randr0-dev libxcb-xfixes0-dev \
+                  libxcb-icccm4-dev libxcb-composite0-dev libxcb-errors-dev libxcb-ewmh-dev \
+                  libxcb-res0-dev libxcb-shape0-dev libxcb-shm0-dev xkb-data hwdata wayland-protocols
+                # 按锁定源码启用的功能预检系统依赖，避免私有依赖编译后才报遗漏。
+                # 新版 Wayland/libdrm/xkbcommon/pixman/protocols 由 bootstrap 提供，
+                # 不能在这里用 Debian 的旧版本代替或要求其满足私有版本下限。
+                xwayland_upstream="${xwayland_version#*:}"
+                system_deps=(
+                  libpipewire-0.3 libffi expat libxml-2.0
+                  egl 'gbm >= 21.1' glesv2 libudev 'libseat >= 0.2.0' hwdata
+                  'libdisplay-info >= 0.2.0' 'libinput >= 1.27.1'
+                  libpcre2-8 libcjson pangocairo "xwayland = ${xwayland_upstream%-*}"
+                  xcb xcb-composite xcb-ewmh xcb-icccm xcb-render
+                  xcb-res 'xcb-xfixes >= 1.15' xcb-randr
+                )
+                pkg-config --print-errors --exists "${system_deps[@]}"
+                for dependency in "${system_deps[@]}"; do
+                  printf 'MANGO_SYSTEM_DEP %s: ' "$dependency"
+                  pkg-config --modversion "$dependency"
+                done
+                for tool in bison glslang; do command -v "$tool"; done
+                test -s "$(pkg-config --variable=pkgdatadir hwdata)/pnp.ids"
+                test -x "$(pkg-config --variable=xwayland xwayland)"
+                echo 'MANGO_SYSTEM_BUILD_DEPENDENCIES_OK'
+                # Mango 的 ANLAND_WITH_DEPS=1 从 lockfile 构建新版私有图形依赖，
+                # 不是 Arch 配方的 pacman 安装开关；不能在干净 Debian worker 上省略。
+                ;;
+              hyprland)
+                python3 -c 'import json, sys; lock=json.load(open(sys.argv[1])); print("\n".join(name + "=" + entry["version"] for name, entry in lock["sources"].items()))' \
+                  "$recipe/dependencies.lock" > /home/anland/.cache/hyprland-build-deps.list
+                mapfile -t locked_sources < /home/anland/.cache/hyprland-build-deps.list
+                test "${#locked_sources[@]}" -eq 5
+                apt-get build-dep -y --no-install-recommends -t trixie-backports "${locked_sources[@]}"
+                # Hyprgrass/wf-touch 不属于 Debian 源包的 Build-Depends。
+                apt-get install -y --no-install-recommends libglm-dev libevdev-dev
+                ;;
+            esac
+            chown -R anland:anland /home/anland
+            chown anland:anland /output
+            # Debian 入口固定输出到 recipe/artifacts；普通用户编译后再收集。
+            runuser -u anland -- env HOME=/home/anland \
+              JOBS="$(nproc)" ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-debian13-v5" \
+              bash "$recipe/build.sh"
+
+            mkdir -p /output/artifacts
+            install -m644 "$recipe/artifacts/"*.deb "$recipe/artifacts/SHA256SUMS" \
+              "$recipe/dependencies.lock" /output/artifacts/
+            cd /output/artifacts
+            sha256sum -c SHA256SUMS
+            packages=(*.deb)
+            found=()
+            for package in "${packages[@]}"; do
+              test -s "$package"
+              [ "$(dpkg-deb -f "$package" Architecture)" = arm64 ]
+              found+=("$(dpkg-deb -f "$package" Package)")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xwayland | sort)" ;;
+              hyprland)
+                expected="$(python3 -c 'import json, sys; lock=json.load(open(sys.argv[1])); print("\n".join(sorted([*lock["runtime_packages"].values(), "xwayland"])))' "$recipe/dependencies.lock")"
+                ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            printf '%s\n' "${packages[@]}" > packages.list
+            python3 - <<'PY_BUILD_INPUTS' > build-inputs.json
+        import json, os
+        print(json.dumps({
+            'schema_version': 1, 'repository': os.environ['ANLAND_REPO'],
+            'commit': os.environ['ANLAND_COMMIT'],
+            'recipe': 'producers/' + os.environ['WM'] + '/Debian13_v5',
+            'distribution': 'debian13', 'architecture': 'arm64',
+            'install_artifacts': False, 'graphical_test': False,
+        }, ensure_ascii=False, indent=2))
+        PY_BUILD_INPUTS
+            sha256sum "${packages[@]}" packages.list dependencies.lock build-inputs.json > SHA256SUMS
+            sha256sum -c SHA256SUMS
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM DISTRO=debian13 COMMIT=$ANLAND_COMMIT"
+        ANLAND_DEBIAN_WM_BUILD
+    - name: 在 Ubuntu 26.04 ARM64 中构建
+      if: ${{ matrix.target == 'ubuntu2604' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" ubuntu:26.04 \
+          bash -s <<'ANLAND_UBUNTU_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial|niri) ;; *) echo "未知 WM：$WM" >&2; exit 1 ;; esac
+            export DEBIAN_FRONTEND=noninteractive
+            printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+            chmod 0755 /usr/sbin/policy-rc.d
+            test -f /etc/apt/sources.list.d/ubuntu.sources
+            sed -i -e 's/^Types: deb$/Types: deb deb-src/' \
+              -e 's/^Components:.*/Components: main restricted universe multiverse/' \
+              /etc/apt/sources.list.d/ubuntu.sources
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates curl sudo python3 util-linux
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/sed\n' > /etc/sudoers.d/anland-apt
+            chmod 0440 /etc/sudoers.d/anland-apt
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            recipe="$source_dir/producers/$WM/Ubuntu2604_v5"
+            test -s "$recipe/dependencies.lock"
+            test -s "$recipe/xwayland.lock"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            chown -R anland:anland /home/anland
+            chown anland:anland /output
+            runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+              ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+              ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-ubuntu2604-v5" \
+              ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.deb)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              [ "$(dpkg-deb -f "$package" Architecture)" = arm64 ]
+              found+=("$(dpkg-deb -f "$package" Package)")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xwayland | sort)" ;;
+              hyprland) expected="$(python3 -c 'import json,sys; lock=json.load(open(sys.argv[1])); print("\n".join(sorted([*lock["runtime_packages"].values(),"xwayland"])))' "$recipe/dependencies.lock")" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xwayland | sort)" ;;
+              niri) expected="$(printf '%s\n' niri-anland xwayland-satellite xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM DISTRO=ubuntu2604 COMMIT=$ANLAND_COMMIT"
+        ANLAND_UBUNTU_WM_BUILD
+    - name: 只收集成品原生软件包
+      id: package
+      env:
+        SLUG: ${{ steps.target.outputs.slug }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        python3 scripts/package-artifacts.py collect --target "$TARGET" \
+          --destination "$asset_dir" "$output_dir/artifacts"
+        echo "asset_dir=$asset_dir" >> "$GITHUB_OUTPUT"
+    - name: 上传可下载的完整软件包
+      id: upload
+      uses: actions/upload-artifact@v6
+      with:
+        name: anland-hyprland-package-${{ steps.target.outputs.slug }}
+        path: ${{ steps.package.outputs.asset_dir }}/*
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 14
+    - name: 取回本次上传的完整产物
+      uses: actions/download-artifact@v7
+      with:
+        name: anland-hyprland-package-${{ steps.target.outputs.slug }}
+        path: ${{ runner.temp }}/anland-hyprland-${{ steps.target.outputs.slug }}-download
+    - name: 确认上传后只有目标软件包且字节一致
+      env:
+        SLUG: ${{ steps.target.outputs.slug }}
+        ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        download_dir="$RUNNER_TEMP/anland-$WM-$SLUG-download"
+        python3 scripts/package-artifacts.py verify --target "$TARGET" "$asset_dir" "$download_dir"
+        {
+          echo "### $WM $TARGET ARM64 构建通过"
+          echo "- 来源提交：\`$ANLAND_COMMIT\`"
+          echo "- [下载成品软件包]($ARTIFACT_URL)（保存 14 天）"
+          echo '- 下载产物仅包含原生软件包，无签名、校验清单、密钥、构建元数据或日志。'
+          echo '- 已逐包比对上传后取回的字节；未安装产物、未运行图形测试。'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: 构建失败时在控制台显示日志结尾
+      if: ${{ failure() }}
+      shell: bash
+      run: |
+        tail -n 80 "$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET/build.log" || true
+  prepare-denial:
+    name: 解析 Anland Denial 源码版本（各发行版共用同一提交）
+    needs: select
+    if: ${{ needs.select.outputs.denial == 'true' }}
+    runs-on: ubuntu-26.04
+    outputs:
+      anland_commit: ${{ steps.resolve.outputs.anland_commit }}
+      targets: ${{ needs.select.outputs.denial_targets }}
+    steps:
+    - name: 要求从 main 分支触发
+      shell: bash
+      run: |
+        if [ "$GITHUB_REF_NAME" != main ]; then
+          echo "此工作流必须从 main 分支触发。" >&2
+          exit 1
+        fi
+    - name: 将请求的源解析为单个提交
+      id: resolve
+      env:
+        ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+        ANLAND_REF: ${{ inputs.wm_ref || 'legacy' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_dir="$RUNNER_TEMP/anland-denial-source"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_REF"
+        anland_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
+        git -C "$source_dir" cat-file -e "${anland_commit}^{commit}"
+        echo "anland_commit=$anland_commit" >> "$GITHUB_OUTPUT"
+        echo "已将 $ANLAND_REPO @ $ANLAND_REF 解析为 $anland_commit"
+  build-denial:
+    name: 构建 Denial ${{ matrix.target }} ARM64 软件包
+    needs: prepare-denial
+    if: ${{ needs.prepare-denial.result == 'success' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.prepare-denial.outputs.targets) }}
+    env:
+      WM: denial
+      TARGET: ${{ matrix.target }}
+      ANLAND_REPO: ${{ inputs.wm_repo || 'https://github.com/sjszero/anland.git' }}
+      ANLAND_COMMIT: ${{ needs.prepare-denial.outputs.anland_commit }}
+    steps:
+    - name: 检出云编译产物收集脚本
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+    - name: 解析 WM 发行版目标
+      id: target
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$TARGET" in
+          Arch) slug=arch; arch=aarch64 ;;
+          Fedora43) slug=fedora43; arch=aarch64 ;;
+          Fedora44) slug=fedora44; arch=aarch64 ;;
+          Debian13) slug=debian13; arch=arm64 ;;
+          ubuntu2604) slug=ubuntu2604; arch=arm64 ;;
+          *) echo "不支持的构建目标：$TARGET" >&2; exit 1 ;;
+        esac
+        echo "slug=$slug" >> "$GITHUB_OUTPUT"
+        echo "arch=$arch" >> "$GITHUB_OUTPUT"
+    - name: 在 Fedora ARM64 中构建（匹配发行版源码和 ABI）
+      if: ${{ matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT -e FEDORA_VERSION \
+          -v "$output_dir:/output" "fedora:$FEDORA_VERSION" bash -s <<'FEDORA_BUILD' 2>&1 | tee "$output_dir/build.log"
+        set -euo pipefail
+        : "${WM:?}" "${ANLAND_REPO:?}" "${ANLAND_COMMIT:?}"
+        case "$WM" in denial|gnome|hyprland|mango|niri) ;; *) echo "Unknown WM: $WM" >&2; exit 1 ;; esac
+        [[ $(uname -m) == aarch64 && $(id -u) == 0 ]] || { echo 'requires an ARM64 Fedora CI container' >&2; exit 1; }
+        source /etc/os-release
+        [[ $ID == fedora && $VERSION_ID == "$FEDORA_VERSION" ]] || exit 1
+        dnf --setopt=install_weak_deps=False install -y git-core ca-certificates curl sudo \
+            python3 util-linux rpm-build rpmdevtools dnf5-plugins tar xz findutils shadow-utils
+        useradd -m -s /bin/bash anland
+        printf 'anland ALL=(root) NOPASSWD: /usr/bin/dnf\n' > /etc/sudoers.d/anland-dnf
+        chmod 0440 /etc/sudoers.d/anland-dnf
+        source_dir=/home/anland/.cache/anland-source
+        mkdir -p "$source_dir"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+        git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+        [[ $(git -C "$source_dir" rev-parse HEAD) == "$ANLAND_COMMIT" ]]
+        recipe="$source_dir/producers/$WM/Fedora${FEDORA_VERSION}_v5"
+        test -s "$recipe/dependencies.lock"
+        for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+        chown -R anland:anland /home/anland
+        mkdir -p /output
+        output_owner=$(stat -c '%u:%g' /output)
+        restore_output_owner() {
+            local build_rc=$?
+            trap - EXIT
+            if ! chown -Rh -- "$output_owner" /output; then
+                printf 'Failed to restore output ownership to %s\n' "$output_owner" >&2
+                if [[ $build_rc == 0 ]]; then build_rc=1; fi
+            fi
+            exit "$build_rc"
+        }
+        trap restore_output_owner EXIT
+        chown anland:anland /output
+        runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+            ANLAND_INSTALL=0 ANLAND_STAGE=build ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+            ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+            WORKDIR="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5" \
+            ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+        cd /output/artifacts
+        package_list="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/packages.list"
+        checksums="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/SHA256SUMS"
+        [[ -s $package_list ]] || package_list=/output/artifacts/packages.list
+        [[ -s $checksums ]] || checksums=/output/artifacts/SHA256SUMS
+        test -s "$package_list"
+        sha256sum -c "$checksums"
+        found=()
+        while IFS= read -r package; do
+            [[ $package == "${package##*/}" && $package == *.rpm && -s $package ]]
+            architecture=$(rpm -qp --qf '%{ARCH}' "$package")
+            [[ $architecture == aarch64 || $architecture == noarch ]]
+            rpm -K "$package"
+            found+=("$(rpm -qp --qf '%{NAME}' "$package")")
+        done < "$package_list"
+        actual=$(printf '%s\n' "${found[@]}" | sort)
+        case "$WM" in
+            mango) expected=$(printf '%s\n' mango-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            hyprland) expected=$(printf '%s\n' hyprland-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            denial) expected=$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            niri) expected=$(printf '%s\n' niri-anland xwayland-satellite xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            gnome) expected=$(printf '%s\n' mutter mutter-common mutter-devel xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+        esac
+        [[ $actual == "$expected" ]] || { printf 'Incomplete Fedora package set:\n%s\nExpected:\n%s\n' "$actual" "$expected" >&2; exit 1; }
+        chmod -R a+rX /output/artifacts
+        printf 'RUNNER_BUILD_ARTIFACTS_OK WM=%s DISTRO=fedora%s COMMIT=%s\n' "$WM" "$FEDORA_VERSION" "$ANLAND_COMMIT"
+        FEDORA_BUILD
+      env:
+        FEDORA_VERSION: ${{ matrix.target == 'Fedora44' && '44' || '43' }}
+    - name: 在 Arch Linux ARM 中构建
+      if: ${{ matrix.target == 'Arch' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        # 挂载父目录而不是 ARTIFACTS 本身，允许 build.sh 原子交换产物目录。
+        docker run --rm -i \
+          --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" \
+          ogarcia/archlinux:latest \
+          bash -s <<'ANLAND_ARCH_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial) ;; *) echo "未知的 WM：$WM" >&2; exit 1 ;; esac
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed base-devel git ca-certificates sudo \
+              python gnupg cmake meson ninja pkgconf patchelf
+            # Denial 使用系统原生 Ninja，避开锁定 depot_tools 的旧 Python wrapper。
+            # 完整 engine/desktop 依赖由其 build.sh 的 ANLAND_WITH_DEPS=1 安装。
+            if [ "$WM" = denial ]; then
+              /usr/bin/ninja --version
+              python3 --version
+            fi
+            # 只交付运行时包，避免 Arch 默认 debug 分包混入预期的软件包集合。
+            printf '\nOPTIONS=("${OPTIONS[@]/#debug/!debug}")\n' >> /etc/makepkg.conf
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/pacman\n' > /etc/sudoers.d/anland-pacman
+            chmod 0440 /etc/sudoers.d/anland-pacman
+            if grep -q '^#PACMAN_AUTH=()' /etc/makepkg.conf; then
+              sed -i 's/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/' /etc/makepkg.conf
+            else
+              printf '\nPACMAN_AUTH=(sudo)\n' >> /etc/makepkg.conf
+            fi
+            chown anland:anland /output
+
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            chown -R anland:anland /home/anland
+            recipe="$source_dir/producers/$WM/Arch_v5"
+            test -f "$recipe/build.sh"
+            test -f "$recipe/startup.sh"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            export WM
+            su -m -s /bin/bash anland -c '
+              export HOME=/home/anland
+              export JOBS="$(nproc)" ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0
+              export WORKDIR="$HOME/.cache/anland-$WM-arch-v5"
+              case "$WM" in
+                denial)
+                  export ARTIFACTS_DIR=/output/artifacts
+                  export ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1
+                  bash "$HOME/.cache/anland-source/producers/denial/Arch_v5/build.sh" --noconfirm
+                  ;;
+                *)
+                  export ARTIFACTS=/output/artifacts
+                  bash "$HOME/.cache/anland-source/producers/$WM/Arch_v5/build.sh"
+                  ;;
+              esac
+            '
+
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.pkg.tar.xz *.pkg.tar.zst *.pkg.tar.gz)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              architecture=$(bsdtar -xOf "$package" .PKGINFO | awk '$1 == "arch" {print $3}')
+              [[ $architecture == aarch64 || $architecture == any ]]
+              found+=("$(LC_ALL=C pacman -Qp "$package" | awk 'NR == 1 {print $1}')")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xorg-xwayland | sort)" ;;
+              hyprland) expected="$(printf '%s\n' hyprland-anland hyprpm-anland xorg-xwayland | sort)" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM COMMIT=$ANLAND_COMMIT"
+        ANLAND_ARCH_WM_BUILD
+    - name: 在 Ubuntu 26.04 ARM64 中构建
+      if: ${{ matrix.target == 'ubuntu2604' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" ubuntu:26.04 \
+          bash -s <<'ANLAND_UBUNTU_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial|niri) ;; *) echo "未知 WM：$WM" >&2; exit 1 ;; esac
+            export DEBIAN_FRONTEND=noninteractive
+            printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+            chmod 0755 /usr/sbin/policy-rc.d
+            test -f /etc/apt/sources.list.d/ubuntu.sources
+            sed -i -e 's/^Types: deb$/Types: deb deb-src/' \
+              -e 's/^Components:.*/Components: main restricted universe multiverse/' \
+              /etc/apt/sources.list.d/ubuntu.sources
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates curl sudo python3 util-linux
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/sed\n' > /etc/sudoers.d/anland-apt
+            chmod 0440 /etc/sudoers.d/anland-apt
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            recipe="$source_dir/producers/$WM/Ubuntu2604_v5"
+            test -s "$recipe/dependencies.lock"
+            test -s "$recipe/xwayland.lock"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            chown -R anland:anland /home/anland
+            chown anland:anland /output
+            runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+              ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+              ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-ubuntu2604-v5" \
+              ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.deb)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              [ "$(dpkg-deb -f "$package" Architecture)" = arm64 ]
+              found+=("$(dpkg-deb -f "$package" Package)")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xwayland | sort)" ;;
+              hyprland) expected="$(python3 -c 'import json,sys; lock=json.load(open(sys.argv[1])); print("\n".join(sorted([*lock["runtime_packages"].values(),"xwayland"])))' "$recipe/dependencies.lock")" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xwayland | sort)" ;;
+              niri) expected="$(printf '%s\n' niri-anland xwayland-satellite xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM DISTRO=ubuntu2604 COMMIT=$ANLAND_COMMIT"
+        ANLAND_UBUNTU_WM_BUILD
+    - name: 在 Debian 13 ARM64 中构建
+      if: ${{ matrix.target == 'Debian13' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" debian:trixie bash -s \
+          < scripts/build-anland-debian13-wm.sh 2>&1 | tee "$output_dir/build.log"
+    - name: 只收集成品原生软件包
+      id: package
+      env:
+        SLUG: ${{ steps.target.outputs.slug }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        python3 scripts/package-artifacts.py collect --target "$TARGET" \
+          --destination "$asset_dir" "$output_dir/artifacts"
+        echo "asset_dir=$asset_dir" >> "$GITHUB_OUTPUT"
+    - name: 上传可下载的完整软件包
+      id: upload
+      uses: actions/upload-artifact@v6
+      with:
+        name: anland-denial-package-${{ steps.target.outputs.slug }}
+        path: ${{ steps.package.outputs.asset_dir }}/*
+        if-no-files-found: error
+        compression-level: 0
+        retention-days: 14
+    - name: 取回本次上传的完整产物
+      uses: actions/download-artifact@v7
+      with:
+        name: anland-denial-package-${{ steps.target.outputs.slug }}
+        path: ${{ runner.temp }}/anland-denial-${{ steps.target.outputs.slug }}-download
+    - name: 确认上传后只有目标软件包且字节一致
+      env:
+        SLUG: ${{ steps.target.outputs.slug }}
+        ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        download_dir="$RUNNER_TEMP/anland-$WM-$SLUG-download"
+        python3 scripts/package-artifacts.py verify --target "$TARGET" "$asset_dir" "$download_dir"
+        {
+          echo "### $WM $TARGET ARM64 构建通过"
+          echo "- 来源提交：\`$ANLAND_COMMIT\`"
+          echo "- [下载成品软件包]($ARTIFACT_URL)（保存 14 天）"
+          echo '- 下载产物仅包含原生软件包，无签名、校验清单、密钥、构建元数据或日志。'
+          echo '- 已逐包比对上传后取回的字节；未安装产物、未运行图形测试。'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: 构建失败时在控制台显示日志结尾
+      if: ${{ failure() }}
+      shell: bash
+      run: |
+        tail -n 80 "$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET/build.log" || true
   prepare-niri:
     name: 解析 Anland Niri 源码版本
     needs: select
@@ -186,241 +1605,476 @@ jobs:
     runs-on: ubuntu-26.04
     outputs:
       anland_commit: ${{ steps.resolve.outputs.anland_commit }}
+      targets: ${{ needs.select.outputs.niri_targets }}
     steps:
-      - name: 要求从 main 分支触发
-        shell: bash
-        run: |
-          if [ "$GITHUB_REF_NAME" != main ]; then
-            echo "此工作流必须从 main 分支触发。" >&2
-            exit 1
-          fi
-
-      - name: 将请求的源解析为单个提交
-        id: resolve
-        env:
-          ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/SuperTurtleDev/anland.git' }}
-          ANLAND_REF: ${{ inputs.niri_ref || 'legacy' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          source_dir="$(mktemp -d)/anland"
-          trap 'rm -rf "${source_dir%/anland}"' EXIT
-          git init --quiet "$source_dir"
-          git -C "$source_dir" remote add origin "$ANLAND_REPO"
-          git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_REF"
-          anland_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
-          git -C "$source_dir" cat-file -e "${anland_commit}^{commit}"
-          echo "anland_commit=$anland_commit" >> "$GITHUB_OUTPUT"
-          echo "已将 $ANLAND_REPO @ $ANLAND_REF 解析为 $anland_commit"
-
+    - name: 要求从 main 分支触发
+      shell: bash
+      run: |
+        if [ "$GITHUB_REF_NAME" != main ]; then
+          echo "此工作流必须从 main 分支触发。" >&2
+          exit 1
+        fi
+    - name: 将请求的源解析为单个提交
+      id: resolve
+      env:
+        ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/sjszero/anland.git' }}
+        ANLAND_REF: ${{ inputs.niri_ref || 'legacy' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        source_dir="$(mktemp -d)/anland"
+        trap 'rm -rf "${source_dir%/anland}"' EXIT
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_REF"
+        anland_commit="$(git -C "$source_dir" rev-parse FETCH_HEAD)"
+        git -C "$source_dir" cat-file -e "${anland_commit}^{commit}"
+        echo "anland_commit=$anland_commit" >> "$GITHUB_OUTPUT"
+        echo "已将 $ANLAND_REPO @ $ANLAND_REF 解析为 $anland_commit"
   build-niri:
-    name: 构建 Niri Arch ARM64 软件包
+    name: 构建 Niri ${{ matrix.target }} ARM64 软件包
     needs: prepare-niri
     runs-on: ubuntu-24.04-arm
     env:
-      ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/SuperTurtleDev/anland.git' }}
+      ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/sjszero/anland.git' }}
       ANLAND_COMMIT: ${{ needs.prepare-niri.outputs.anland_commit }}
+      WM: niri
+      TARGET: ${{ matrix.target }}
     steps:
-      - name: 在 Arch Linux ARM 中构建软件包
-        shell: bash
-        run: |
-          set -euo pipefail
-          output_dir=.niri-package-build/arch
-          rm -rf "$output_dir"
-          mkdir -p "$output_dir"
-          docker run --rm -i \
-            --platform linux/arm64 \
-            -e ANLAND_REPO \
-            -e ANLAND_COMMIT \
-            -v "$PWD/$output_dir:/packages" \
-            ogarcia/archlinux:latest \
-            bash -s <<'ANLAND_BUILD'
-              set -euo pipefail
-              pacman -Syu --noconfirm
-              pacman -S --noconfirm --needed base-devel git ca-certificates sudo
-              useradd -m -s /bin/bash anland
-              printf "anland ALL=(root) NOPASSWD: /usr/bin/pacman\n" > /etc/sudoers.d/anland-pacman
-              chmod 0440 /etc/sudoers.d/anland-pacman
-              if grep -q "^#PACMAN_AUTH=()" /etc/makepkg.conf; then
-                sed -i "s/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/" /etc/makepkg.conf
-              else
-                printf "\nPACMAN_AUTH=(sudo)\n" >> /etc/makepkg.conf
-              fi
-              chown -R anland:anland /packages
+    - name: 检出云编译产物收集脚本
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+    - name: 在 Fedora ARM64 中构建（匹配发行版源码和 ABI）
+      if: ${{ matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT -e FEDORA_VERSION \
+          -v "$output_dir:/output" "fedora:$FEDORA_VERSION" bash -s <<'FEDORA_BUILD' 2>&1 | tee "$output_dir/build.log"
+        set -euo pipefail
+        : "${WM:?}" "${ANLAND_REPO:?}" "${ANLAND_COMMIT:?}"
+        case "$WM" in denial|gnome|hyprland|mango|niri) ;; *) echo "Unknown WM: $WM" >&2; exit 1 ;; esac
+        [[ $(uname -m) == aarch64 && $(id -u) == 0 ]] || { echo 'requires an ARM64 Fedora CI container' >&2; exit 1; }
+        source /etc/os-release
+        [[ $ID == fedora && $VERSION_ID == "$FEDORA_VERSION" ]] || exit 1
+        dnf --setopt=install_weak_deps=False install -y git-core ca-certificates curl sudo \
+            python3 util-linux rpm-build rpmdevtools dnf5-plugins tar xz findutils shadow-utils
+        useradd -m -s /bin/bash anland
+        printf 'anland ALL=(root) NOPASSWD: /usr/bin/dnf\n' > /etc/sudoers.d/anland-dnf
+        chmod 0440 /etc/sudoers.d/anland-dnf
+        source_dir=/home/anland/.cache/anland-source
+        mkdir -p "$source_dir"
+        git init --quiet "$source_dir"
+        git -C "$source_dir" remote add origin "$ANLAND_REPO"
+        git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+        git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+        [[ $(git -C "$source_dir" rev-parse HEAD) == "$ANLAND_COMMIT" ]]
+        recipe="$source_dir/producers/$WM/Fedora${FEDORA_VERSION}_v5"
+        test -s "$recipe/dependencies.lock"
+        for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+        chown -R anland:anland /home/anland
+        mkdir -p /output
+        output_owner=$(stat -c '%u:%g' /output)
+        restore_output_owner() {
+            local build_rc=$?
+            trap - EXIT
+            if ! chown -Rh -- "$output_owner" /output; then
+                printf 'Failed to restore output ownership to %s\n' "$output_owner" >&2
+                if [[ $build_rc == 0 ]]; then build_rc=1; fi
+            fi
+            exit "$build_rc"
+        }
+        trap restore_output_owner EXIT
+        chown anland:anland /output
+        runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+            ANLAND_INSTALL=0 ANLAND_STAGE=build ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+            ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+            WORKDIR="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5" \
+            ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+        cd /output/artifacts
+        package_list="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/packages.list"
+        checksums="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/SHA256SUMS"
+        [[ -s $package_list ]] || package_list=/output/artifacts/packages.list
+        [[ -s $checksums ]] || checksums=/output/artifacts/SHA256SUMS
+        test -s "$package_list"
+        sha256sum -c "$checksums"
+        found=()
+        while IFS= read -r package; do
+            [[ $package == "${package##*/}" && $package == *.rpm && -s $package ]]
+            architecture=$(rpm -qp --qf '%{ARCH}' "$package")
+            [[ $architecture == aarch64 || $architecture == noarch ]]
+            rpm -K "$package"
+            found+=("$(rpm -qp --qf '%{NAME}' "$package")")
+        done < "$package_list"
+        actual=$(printf '%s\n' "${found[@]}" | sort)
+        case "$WM" in
+            mango) expected=$(printf '%s\n' mango-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            hyprland) expected=$(printf '%s\n' hyprland-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            denial) expected=$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            niri) expected=$(printf '%s\n' niri-anland xwayland-satellite xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+            gnome) expected=$(printf '%s\n' mutter mutter-common mutter-devel xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+        esac
+        [[ $actual == "$expected" ]] || { printf 'Incomplete Fedora package set:\n%s\nExpected:\n%s\n' "$actual" "$expected" >&2; exit 1; }
+        chmod -R a+rX /output/artifacts
+        printf 'RUNNER_BUILD_ARTIFACTS_OK WM=%s DISTRO=fedora%s COMMIT=%s\n' "$WM" "$FEDORA_VERSION" "$ANLAND_COMMIT"
+        FEDORA_BUILD
+      env:
+        FEDORA_VERSION: ${{ matrix.target == 'Fedora44' && '44' || '43' }}
+    - name: 在 Arch Linux ARM 中构建软件包
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir=.niri-package-build/arch
+        rm -rf "$output_dir"
+        mkdir -p "$output_dir"
+        docker run --rm -i \
+          --platform linux/arm64 \
+          -e ANLAND_REPO \
+          -e ANLAND_COMMIT \
+          -v "$PWD/$output_dir:/packages" \
+          ogarcia/archlinux:latest \
+          bash -s <<'ANLAND_BUILD'
+            set -euo pipefail
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed base-devel git ca-certificates sudo
+            useradd -m -s /bin/bash anland
+            printf "anland ALL=(root) NOPASSWD: /usr/bin/pacman\n" > /etc/sudoers.d/anland-pacman
+            chmod 0440 /etc/sudoers.d/anland-pacman
+            if grep -q "^#PACMAN_AUTH=()" /etc/makepkg.conf; then
+              sed -i "s/^#PACMAN_AUTH=().*/PACMAN_AUTH=(sudo)/" /etc/makepkg.conf
+            else
+              printf "\nPACMAN_AUTH=(sudo)\n" >> /etc/makepkg.conf
+            fi
+            chown -R anland:anland /packages
 
-              git init --quiet /tmp/anland
-              git -C /tmp/anland remote add origin "$ANLAND_REPO"
-              git -C /tmp/anland fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
-              git -C /tmp/anland checkout --quiet --detach FETCH_HEAD
-              test -f /tmp/anland/producers/niri/Arch_v5/build.sh
-              su -s /bin/bash anland -c 'cd /tmp/anland/producers/niri/Arch_v5 && ANLAND_INSTALL=0 WORKDIR=/packages ./build.sh --noconfirm'
-              chmod -R a+rX /packages
+            mkdir -p /home/anland/.cache/anland-source
+            git init --quiet /home/anland/.cache/anland-source
+            git -C /home/anland/.cache/anland-source remote add origin "$ANLAND_REPO"
+            git -C /home/anland/.cache/anland-source fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C /home/anland/.cache/anland-source checkout --quiet --detach FETCH_HEAD
+            chown -R anland:anland /home/anland
+            printf '\nOPTIONS=("${OPTIONS[@]/#debug/!debug}")\n' >> /etc/makepkg.conf
+            test -f /home/anland/.cache/anland-source/producers/niri/Arch_v5/build.sh
+            su -s /bin/bash anland -c 'cd /home/anland/.cache/anland-source/producers/niri/Arch_v5 && ANLAND_INSTALL=0 WORKDIR=/packages ./build.sh --noconfirm'
+            chmod -R a+rX /packages
 
-              package_dir=/packages/packages
-              niri_package=
-              found_niri=false
-              found_xwayland=false
-              while IFS= read -r package; do
-                package_name="$(LC_ALL=C pacman -Qp "$package" | awk 'NR == 1 { print $1 }')"
-                case "$package_name" in
-                  niri-anland)
-                    niri_package="$package"
-                    found_niri=true
-                    ;;
-                  xorg-xwayland)
-                    found_xwayland=true
-                    ;;
-                  *) echo "构建生成了意外的 Arch 包：$package_name" >&2; exit 1 ;;
-                esac
-              done < <(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
-              [ "$found_niri" = true ] || { echo "未找到 niri-anland pacman 包" >&2; exit 1; }
-              [ "$found_xwayland" = true ] || { echo "未找到打过补丁的 xorg-xwayland pacman 包" >&2; exit 1; }
-              package_version="$(LC_ALL=C pacman -Qp "$niri_package" | awk 'NR == 1 { print $2 }')"
-              package_version="${package_version#*:}"
-              package_version="${package_version%-*}"
-              case "$package_version" in
-                ''|*[!A-Za-z0-9.+~_-]*) echo "无效的 Niri 包版本：$package_version" >&2; exit 1 ;;
+            package_dir=/packages/packages
+            niri_package=
+            found_niri=false
+            found_xwayland=false
+            while IFS= read -r package; do
+              package_name="$(LC_ALL=C pacman -Qp "$package" | awk 'NR == 1 { print $1 }')"
+              case "$package_name" in
+                niri-anland)
+                  niri_package="$package"
+                  found_niri=true
+                  ;;
+                xorg-xwayland)
+                  found_xwayland=true
+                  ;;
+                *) echo "构建生成了意外的 Arch 包：$package_name" >&2; exit 1 ;;
               esac
-              printf '%s\n' "$package_version" > /packages/.niri-version
-          ANLAND_BUILD
-
-      - name: 打包发布资产
-        id: package
-        shell: bash
-        run: |
-          set -euo pipefail
-          output_dir=.niri-package-build/arch
-          package_dir="$RUNNER_TEMP/anland-niri-packages/arch"
-          release_dir="$GITHUB_WORKSPACE/.release-assets/niri"
-          rm -rf "$package_dir" "$release_dir"
-          mkdir -p "$package_dir" "$release_dir"
-          find "$output_dir/packages" -maxdepth 1 -type f -name '*.pkg.tar.*' -exec cp -v {} "$package_dir/" \;
-          package_count="$(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' | wc -l)"
-          [ "$package_count" -gt 0 ] || { echo "没有收集到 pacman 软件包" >&2; exit 1; }
-          version="$(tr -d '[:space:]' < "$output_dir/.niri-version")"
-          case "$version" in
-            ''|*[!A-Za-z0-9.+~_-]*) echo "无效的 Niri 包版本：$version" >&2; exit 1 ;;
-          esac
-          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=arch\nniri_version=%s\nbuild_time=%s\n' "$version" "$build_time" > "$package_dir/.anland-niri-build-info"
-          asset="anland-niri-arch-${version}-aarch64.tar.gz"
-          tar -C "$RUNNER_TEMP" -czf "$release_dir/$asset" anland-niri-packages/arch
-          echo "asset_path=$release_dir/$asset" >> "$GITHUB_OUTPUT"
-          echo "已将 $package_count 个包打包为 $asset"
-
-      - name: 上传构建资产
-        uses: actions/upload-artifact@v6
-        with:
-          name: anland-niri-package-arch
-          path: ${{ steps.package.outputs.asset_path }}
-          if-no-files-found: error
-          retention-days: 1
-
+            done < <(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print | sort)
+            [ "$found_niri" = true ] || { echo "未找到 niri-anland pacman 包" >&2; exit 1; }
+            [ "$found_xwayland" = true ] || { echo "未找到打过补丁的 xorg-xwayland pacman 包" >&2; exit 1; }
+            package_version="$(LC_ALL=C pacman -Qp "$niri_package" | awk 'NR == 1 { print $2 }')"
+            package_version="${package_version#*:}"
+            package_version="${package_version%-*}"
+            case "$package_version" in
+              ''|*[!A-Za-z0-9.+~_-]*) echo "无效的 Niri 包版本：$package_version" >&2; exit 1 ;;
+            esac
+            printf '%s\n' "$package_version" > /packages/.niri-version
+        ANLAND_BUILD
+      if: ${{ matrix.target == 'Arch' }}
+    - name: 打包发布资产
+      id: arch_package
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir=.niri-package-build/arch
+        package_dir="$RUNNER_TEMP/anland-niri-packages/arch"
+        release_dir="$GITHUB_WORKSPACE/.release-assets/niri"
+        rm -rf "$package_dir" "$release_dir"
+        mkdir -p "$package_dir" "$release_dir"
+        python3 scripts/package-artifacts.py collect --target Arch --destination "$package_dir" "$output_dir/packages"
+        package_count="$(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) | wc -l)"
+        [ "$package_count" -gt 0 ] || { echo "没有收集到 pacman 软件包" >&2; exit 1; }
+        version="$(tr -d '[:space:]' < "$output_dir/.niri-version")"
+        case "$version" in
+          ''|*[!A-Za-z0-9.+~_-]*) echo "无效的 Niri 包版本：$version" >&2; exit 1 ;;
+        esac
+        build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        asset="anland-niri-arch-${version}-aarch64.tar.gz"
+        tar --mtime="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -C "$RUNNER_TEMP" -czf "$release_dir/$asset" anland-niri-packages/arch
+        python3 scripts/package-artifacts.py verify-archive --target Arch "$release_dir/$asset"
+        echo "asset_path=$release_dir/$asset" >> "$GITHUB_OUTPUT"
+        echo "已将 $package_count 个包打包为 $asset"
+      if: ${{ matrix.target == 'Arch' }}
+    - name: 上传构建资产
+      uses: actions/upload-artifact@v6
+      with:
+        name: anland-niri-package-arch
+        path: ${{ steps.arch_package.outputs.asset_path }}
+        if-no-files-found: error
+        retention-days: 1
+      if: ${{ matrix.target == 'Arch' }}
+    - id: target
+      if: ${{ matrix.target == 'ubuntu2604' || matrix.target == 'Debian13' || matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      name: 解析 WM 发行版目标
+      run: |
+        set -euo pipefail
+        case "$TARGET" in
+          Arch) slug=arch; arch=aarch64 ;;
+          Fedora43) slug=fedora43; arch=aarch64 ;;
+          Fedora44) slug=fedora44; arch=aarch64 ;;
+          Debian13) slug=debian13; arch=arm64 ;;
+          ubuntu2604) slug=ubuntu2604; arch=arm64 ;;
+          *) echo "不支持的构建目标：$TARGET" >&2; exit 1 ;;
+        esac
+        echo "slug=$slug" >> "$GITHUB_OUTPUT"
+        echo "arch=$arch" >> "$GITHUB_OUTPUT"
+      shell: bash
+    - if: ${{ matrix.target == 'ubuntu2604' }}
+      name: 在 Ubuntu 26.04 ARM64 中构建
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" ubuntu:26.04 \
+          bash -s <<'ANLAND_UBUNTU_WM_BUILD' 2>&1 | tee "$output_dir/build.log"
+            set -euo pipefail
+            case "$WM" in mango|hyprland|denial|niri) ;; *) echo "未知 WM：$WM" >&2; exit 1 ;; esac
+            export DEBIAN_FRONTEND=noninteractive
+            printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+            chmod 0755 /usr/sbin/policy-rc.d
+            test -f /etc/apt/sources.list.d/ubuntu.sources
+            sed -i -e 's/^Types: deb$/Types: deb deb-src/' \
+              -e 's/^Components:.*/Components: main restricted universe multiverse/' \
+              /etc/apt/sources.list.d/ubuntu.sources
+            apt-get update
+            apt-get install -y --no-install-recommends git ca-certificates curl sudo python3 util-linux
+            useradd -m -s /bin/bash anland
+            printf 'anland ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/sed\n' > /etc/sudoers.d/anland-apt
+            chmod 0440 /etc/sudoers.d/anland-apt
+            source_dir=/home/anland/.cache/anland-source
+            mkdir -p "$source_dir"
+            git init --quiet "$source_dir"
+            git -C "$source_dir" remote add origin "$ANLAND_REPO"
+            git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+            git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+            recipe="$source_dir/producers/$WM/Ubuntu2604_v5"
+            test -s "$recipe/dependencies.lock"
+            test -s "$recipe/xwayland.lock"
+            for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+            chown -R anland:anland /home/anland
+            chown anland:anland /output
+            runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+              ANLAND_INSTALL=0 ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+              ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-ubuntu2604-v5" \
+              ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+            cd /output/artifacts
+            shopt -s nullglob
+            packages=(*.deb)
+            [ "${#packages[@]}" -gt 0 ]
+            found=()
+            for package in "${packages[@]}"; do
+              [[ -f "$package" && ! -L "$package" && -s "$package" ]]
+              [ "$(dpkg-deb -f "$package" Architecture)" = arm64 ]
+              found+=("$(dpkg-deb -f "$package" Package)")
+            done
+            actual="$(printf '%s\n' "${found[@]}" | sort)"
+            case "$WM" in
+              mango) expected="$(printf '%s\n' mango-anland xwayland | sort)" ;;
+              hyprland) expected="$(python3 -c 'import json,sys; lock=json.load(open(sys.argv[1])); print("\n".join(sorted([*lock["runtime_packages"].values(),"xwayland"])))' "$recipe/dependencies.lock")" ;;
+              denial) expected="$(printf '%s\n' denial-anland-engine denial denial-desktop xwayland | sort)" ;;
+              niri) expected="$(printf '%s\n' niri-anland xwayland-satellite xwayland | sort)" ;;
+            esac
+            [ "$actual" = "$expected" ] || { echo "软件包集合不完整：$actual" >&2; exit 1; }
+            sha256sum "${packages[@]}"
+            chmod -R a+rX /output/artifacts
+            echo "RUNNER_BUILD_ARTIFACTS_OK WM=$WM DISTRO=ubuntu2604 COMMIT=$ANLAND_COMMIT"
+        ANLAND_UBUNTU_WM_BUILD
+      shell: bash
+    - name: 在 Debian 13 ARM64 中构建
+      if: ${{ matrix.target == 'Debian13' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        mkdir -p "$output_dir"
+        docker run --rm -i --platform linux/arm64 \
+          -e WM -e ANLAND_REPO -e ANLAND_COMMIT \
+          -v "$output_dir:/output" debian:trixie bash -s \
+          < scripts/build-anland-debian13-wm.sh 2>&1 | tee "$output_dir/build.log"
+    - env:
+        SLUG: ${{ steps.target.outputs.slug }}
+      id: package
+      if: ${{ matrix.target == 'ubuntu2604' || matrix.target == 'Debian13' || matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      name: 只收集成品原生软件包
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET"
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        python3 scripts/package-artifacts.py collect --target "$TARGET" \
+          --destination "$asset_dir" "$output_dir/artifacts"
+        echo "asset_dir=$asset_dir" >> "$GITHUB_OUTPUT"
+      shell: bash
+    - id: upload
+      if: ${{ matrix.target == 'ubuntu2604' || matrix.target == 'Debian13' || matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      name: 上传可下载的完整软件包
+      uses: actions/upload-artifact@v6
+      with:
+        compression-level: 0
+        if-no-files-found: error
+        name: anland-niri-package-${{ steps.target.outputs.slug }}
+        path: ${{ steps.package.outputs.asset_dir }}/*
+        retention-days: 14
+    - if: ${{ matrix.target == 'ubuntu2604' || matrix.target == 'Debian13' || matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      name: 取回本次上传的完整产物
+      uses: actions/download-artifact@v7
+      with:
+        name: anland-niri-package-${{ steps.target.outputs.slug }}
+        path: ${{ runner.temp }}/anland-niri-${{ steps.target.outputs.slug }}-download
+    - env:
+        ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        SLUG: ${{ steps.target.outputs.slug }}
+      if: ${{ matrix.target == 'ubuntu2604' || matrix.target == 'Debian13' || matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+      name: 确认上传后只有目标软件包且字节一致
+      run: |
+        set -euo pipefail
+        asset_dir="$GITHUB_WORKSPACE/.release-assets/$WM-$SLUG"
+        download_dir="$RUNNER_TEMP/anland-$WM-$SLUG-download"
+        python3 scripts/package-artifacts.py verify --target "$TARGET" "$asset_dir" "$download_dir"
+        {
+          echo "### $WM $TARGET ARM64 构建通过"
+          echo "- 来源提交：\`$ANLAND_COMMIT\`"
+          echo "- [下载成品软件包]($ARTIFACT_URL)（保存 14 天）"
+          echo '- 下载产物仅包含原生软件包，无签名、校验清单、密钥、构建元数据或日志。'
+          echo '- 已逐包比对上传后取回的字节；未安装产物、未运行图形测试。'
+        } >> "$GITHUB_STEP_SUMMARY"
+      shell: bash
+    - if: ${{ failure() && (matrix.target == 'ubuntu2604' || matrix.target == 'Debian13' || matrix.target == 'Fedora43' || matrix.target == 'Fedora44') }}
+      name: 构建失败时在控制台显示日志结尾
+      shell: bash
+      run: |
+        tail -n 80 "$GITHUB_WORKSPACE/.wm-package-build/$WM/$TARGET/build.log" || true
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.prepare-niri.outputs.targets) }}
   release-niri:
     name: 更新 Anland Niri 滚动发布
-    needs: [prepare-niri, build-niri]
-    if: ${{ always() && !cancelled() && needs.prepare-niri.result == 'success' && needs.build-niri.result == 'success' }}
+    needs:
+    - prepare-niri
+    - build-niri
+    if: ${{ always() && !cancelled() && needs.prepare-niri.result == 'success' && contains(needs.prepare-niri.outputs.targets, 'Arch') }}
     runs-on: ubuntu-26.04
     concurrency:
       group: anland-niri-package-release
       cancel-in-progress: false
     steps:
-      - name: 检出发布脚本
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ github.sha }}
+    - name: 检出发布脚本
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ github.sha }}
+    - name: 确保滚动标签存在
+      shell: bash
+      run: |
+        set -euo pipefail
+        tag=anland-niri-packages
+        if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+          echo "滚动标签 ${tag} 已存在。"
+        elif git tag "$tag" "$GITHUB_SHA" && git push origin "refs/tags/${tag}"; then
+          echo "已创建滚动标签 ${tag}。"
+        elif git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+          echo "滚动标签 ${tag} 已由并发任务创建。"
+        else
+          echo "无法确认或创建滚动标签 ${tag}。" >&2
+          exit 1
+        fi
+    - name: 下载 Niri 构建资产
+      uses: actions/download-artifact@v7
+      with:
+        name: anland-niri-package-arch
+        path: release-assets
+    - name: 更新固定发布与软件包清单
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/sjszero/anland.git' }}
+        ANLAND_REF: ${{ inputs.niri_ref || 'legacy' }}
+        ANLAND_COMMIT: ${{ needs.prepare-niri.outputs.anland_commit }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        release_dir="$GITHUB_WORKSPACE/release-assets"
+        rolling_release_tag=anland-niri-packages
+        archive="$(find "$release_dir" -maxdepth 1 -type f -name 'anland-niri-arch-*-aarch64.tar.gz' -print)"
+        [ -n "$archive" ] && [ "$(printf '%s\n' "$archive" | wc -l)" -eq 1 ] || {
+          echo "没有且仅有一个 Niri 发布归档。" >&2; exit 1;
+        }
+        asset="${archive##*/}"
+        build_time="$(python3 scripts/package-artifacts.py archive-time --target Arch "$archive")"
+        version="${asset#anland-niri-arch-}"
+        version="${version%-aarch64.tar.gz}"
+        [ -n "$build_time" ] && [ -n "$version" ] || { echo "Niri 构建元数据无效。" >&2; exit 1; }
+        {
+          printf 'format=1\nrelease_tag=%s\nrevision=run-%s-%s\ngenerated_at=%s\n' "$rolling_release_tag" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          printf 'source_repository=%s\nsource_ref=%s\nsource_commit=%s\narch=%s\n' "$ANLAND_REPO" "$ANLAND_REF" "$ANLAND_COMMIT" "$asset"
+        } > "$release_dir/anland-niri-manifest"
+        cp scripts/tui/install-anland-niri.sh "$release_dir/install-anland-niri.sh"
+        chmod +x "$release_dir/install-anland-niri.sh"
+        (cd "$release_dir" && sha256sum "$asset" anland-niri-manifest install-anland-niri.sh > SHA256SUMS)
+        notes="$(printf '%s\n' \
+          '# Anland Niri Arch ARM64 预编译包' '' \
+          '包含 Niri Anland backend 与打过补丁的 Xwayland pacman 软件包。归档内目录为 `anland-niri-packages/arch/`。' '' \
+          '## 发布资产' '' \
+          "- [${asset}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${rolling_release_tag}/${asset})（Arch Linux ARM64，Niri ${version}，构建时间 ${build_time}）" \
+          '- `anland-niri-manifest` 描述来源提交及平台资产。' \
+          '- `install-anland-niri.sh` 可在目标 Arch Linux ARM 系统中安装或卸载软件包。' \
+          '- `SHA256SUMS` 校验发布归档、manifest 与安装脚本。' '' \
+          "源码：\`${ANLAND_REPO}\` @ \`${ANLAND_COMMIT}\`（请求：\`${ANLAND_REF}\`）。" \
+          "工作流提交：\`${GITHUB_SHA}\`。")"
 
-      - name: 确保滚动标签存在
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag=anland-niri-packages
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "滚动标签 ${tag} 已存在。"
-          elif git tag "$tag" "$GITHUB_SHA" && git push origin "refs/tags/${tag}"; then
-            echo "已创建滚动标签 ${tag}。"
-          elif git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "滚动标签 ${tag} 已由并发任务创建。"
-          else
-            echo "无法确认或创建滚动标签 ${tag}。" >&2
-            exit 1
-          fi
-
-      - name: 下载 Niri 构建资产
-        uses: actions/download-artifact@v7
-        with:
-          name: anland-niri-package-arch
-          path: release-assets
-
-      - name: 更新固定发布与软件包清单
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/SuperTurtleDev/anland.git' }}
-          ANLAND_REF: ${{ inputs.niri_ref || 'legacy' }}
-          ANLAND_COMMIT: ${{ needs.prepare-niri.outputs.anland_commit }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_dir="$GITHUB_WORKSPACE/release-assets"
-          rolling_release_tag=anland-niri-packages
-          archive="$(find "$release_dir" -maxdepth 1 -type f -name 'anland-niri-arch-*-aarch64.tar.gz' -print)"
-          [ -n "$archive" ] && [ "$(printf '%s\n' "$archive" | wc -l)" -eq 1 ] || {
-            echo "没有且仅有一个 Niri 发布归档。" >&2; exit 1;
-          }
-          asset="${archive##*/}"
-          build_time="$(tar -xOzf "$archive" anland-niri-packages/arch/.anland-niri-build-info | sed -n 's/^build_time=//p')"
-          version="$(tar -xOzf "$archive" anland-niri-packages/arch/.anland-niri-build-info | sed -n 's/^niri_version=//p')"
-          [ -n "$build_time" ] && [ -n "$version" ] || { echo "Niri 构建元数据无效。" >&2; exit 1; }
-          {
-            printf 'format=1\nrelease_tag=%s\nrevision=run-%s-%s\ngenerated_at=%s\n' "$rolling_release_tag" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            printf 'source_repository=%s\nsource_ref=%s\nsource_commit=%s\narch=%s\n' "$ANLAND_REPO" "$ANLAND_REF" "$ANLAND_COMMIT" "$asset"
-          } > "$release_dir/anland-niri-manifest"
-          cp scripts/tui/install-anland-niri.sh "$release_dir/install-anland-niri.sh"
-          chmod +x "$release_dir/install-anland-niri.sh"
-          (cd "$release_dir" && sha256sum "$asset" anland-niri-manifest install-anland-niri.sh > SHA256SUMS)
-          notes="$(printf '%s\n' \
-            '# Anland Niri Arch ARM64 预编译包' '' \
-            '包含 Niri Anland backend 与打过补丁的 Xwayland pacman 软件包。归档内目录为 `anland-niri-packages/arch/`。' '' \
-            '## 发布资产' '' \
-            "- [${asset}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${rolling_release_tag}/${asset})（Arch Linux ARM64，Niri ${version}，构建时间 ${build_time}）" \
-            '- `anland-niri-manifest` 描述来源提交及平台资产。' \
-            '- `install-anland-niri.sh` 可在目标 Arch Linux ARM 系统中安装或卸载软件包。' \
-            '- `SHA256SUMS` 校验发布归档、manifest 与安装脚本。' '' \
-            "源码：\`${ANLAND_REPO}\` @ \`${ANLAND_COMMIT}\`（请求：\`${ANLAND_REF}\`）。" \
-            "工作流提交：\`${GITHUB_SHA}\`。")"
-
-          release_exists=false
-          gh release view "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && release_exists=true || true
-          if [ "$release_exists" = true ]; then
-            gh release upload "$rolling_release_tag" "$archive" "$release_dir/install-anland-niri.sh" "$release_dir/anland-niri-manifest" "$release_dir/SHA256SUMS" \
-              --repo "$GITHUB_REPOSITORY" --clobber
-            asset_rows="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$rolling_release_tag" --jq '.assets[] | [.id, .name] | @tsv')"
-            while IFS=$'\t' read -r asset_id asset_name; do
-              [ -n "$asset_id" ] || continue
-              case "$asset_name" in
-                anland-niri-arch-*-aarch64.tar.gz)
-                  [ "$asset_name" = "$asset" ] || gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
-                  ;;
-              esac
-            done <<< "$asset_rows"
-            gh release edit "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" \
-              --title 'Anland Niri Arch ARM64 预编译包' --notes "$notes" --draft=false --latest=false
-          else
-            gh release create "$rolling_release_tag" "$archive" "$release_dir/install-anland-niri.sh" "$release_dir/anland-niri-manifest" "$release_dir/SHA256SUMS" \
-              --repo "$GITHUB_REPOSITORY" --draft --latest=false --target "$GITHUB_SHA" \
-              --title 'Anland Niri Arch ARM64 预编译包' --notes "$notes"
-            gh release edit "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
-          fi
-          echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$rolling_release_tag"
-
-      - name: 同步到 CNB 国内镜像
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
-          CNB_REPO: ${{ vars.CNB_REPO }}
-        run: bash scripts/publish-cnb-release.sh anland-niri-packages
+        release_exists=false
+        gh release view "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && release_exists=true || true
+        if [ "$release_exists" = true ]; then
+          gh release upload "$rolling_release_tag" "$archive" "$release_dir/install-anland-niri.sh" "$release_dir/anland-niri-manifest" "$release_dir/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+          asset_rows="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$rolling_release_tag" --jq '.assets[] | [.id, .name] | @tsv')"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            [ -n "$asset_id" ] || continue
+            case "$asset_name" in
+              anland-niri-arch-*-aarch64.tar.gz)
+                [ "$asset_name" = "$asset" ] || gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+                ;;
+            esac
+          done <<< "$asset_rows"
+          gh release edit "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" \
+            --title 'Anland Niri Arch ARM64 预编译包' --notes "$notes" --draft=false --latest=false
+        else
+          gh release create "$rolling_release_tag" "$archive" "$release_dir/install-anland-niri.sh" "$release_dir/anland-niri-manifest" "$release_dir/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" --draft --latest=false --target "$GITHUB_SHA" \
+            --title 'Anland Niri Arch ARM64 预编译包' --notes "$notes"
+          gh release edit "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+        fi
+        echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$rolling_release_tag"
+    - name: 同步到 CNB 国内镜像
+      if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        CNB_REPO: ${{ vars.CNB_REPO }}
+      run: |-
+        bash scripts/publish-cnb-release.sh anland-niri-packages
 
   # ==========================================================================
   # Anland KDE Wayland（kwin + Xwayland）
@@ -469,7 +2123,7 @@ jobs:
       - name: 将请求的源解析为单个提交
         id: resolve
         env:
-          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.kde_ref || 'legacy' }}
         shell: bash
         run: |
@@ -497,11 +2151,15 @@ jobs:
         target: ${{ fromJson(needs.prepare-kde.outputs.targets) }}
 
     env:
-      ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/superturtlee/anland.git' }}
+      ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/sjszero/anland.git' }}
       ANLAND_COMMIT: ${{ needs.prepare-kde.outputs.anland_commit }}
       BUILD_TARGET: ${{ matrix.target }}
 
     steps:
+      - name: 检出云编译产物收集脚本
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
       - name: 解析构建目标
         id: target
         shell: bash
@@ -538,12 +2196,9 @@ jobs:
               ;;
             Fedora44)
               image=fedora:44
-              # The shared upstream script defaults to Fedora 43's SRPM and
-              # skips Xwayland. Override both to match Fedora 44 and collect
-              # the same KWin + Xwayland package set as Fedora 43.
-              script=producers/kde/Fedora43_v5/build.sh
+              script=producers/kde/Fedora44_v5/build.sh
               build_xwayland=1
-              kwin_source=kwin
+              kwin_source=kwin-6.7.5-1.fc44
               package_pattern='*.rpm'
               asset_prefix=anland-kde-fedora44-kwin-
               asset_arch=aarch64
@@ -643,7 +2298,7 @@ jobs:
                 # anland_backend_* source trees instead.
                 ubuntu2604) backend_dir=/tmp/anland/producers/kde/ubuntu2604_v5/kwin/src/backends/anland ;;
                 Debian13) backend_dir=/tmp/anland/producers/kde/Debian13_v5/kwin/src/backends/anland ;;
-                Fedora43|Fedora44) backend_dir=/tmp/anland/producers/kde/Fedora43_v5/kwin/src/backends/anland ;;
+                Fedora43|Fedora44) backend_dir=/tmp/anland/producers/kde/${BUILD_TARGET}_v5/kwin/src/backends/anland ;;
                 Arch) backend_dir=/tmp/anland/producers/kde/Arch_v5/kwin/src/backends/anland ;;
                 *) echo "不支持的构建目标：$BUILD_TARGET" >&2; exit 1 ;;
               esac
@@ -698,6 +2353,15 @@ jobs:
                 # INSTALL=0 也会跳过上游脚本中写 /etc/environment 的安装后配置。
                 su -s /bin/bash anland -c "cd /tmp/anland/$(dirname "$BUILD_SCRIPT") && INSTALL=0 WORKDIR=/tmp/kde-packages ./$(basename "$BUILD_SCRIPT") --noconfirm"
                 chmod -R a+rwX /tmp/kde-packages
+              elif [ "$BUILD_TARGET" = Fedora44 ]; then
+                useradd -m -s /bin/bash anland
+                printf 'anland ALL=(root) NOPASSWD: /usr/bin/dnf\n' > /etc/sudoers.d/anland-dnf
+                chmod 0440 /etc/sudoers.d/anland-dnf
+                chown -R anland:anland /tmp/anland /tmp/kde-packages
+                runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+                  ANLAND_INSTALL=0 ANLAND_LOCK_PACKAGES=0 BUILD_XWAYLAND=1 \
+                  WORKDIR=/tmp/kde-packages bash "/tmp/anland/$BUILD_SCRIPT"
+                chmod -R a+rX /tmp/kde-packages
               else
                 cd "/tmp/anland/$(dirname "$BUILD_SCRIPT")"
                 WORKDIR=/root/kde-packages sudo -E "./$(basename "$BUILD_SCRIPT")"
@@ -721,7 +2385,7 @@ jobs:
                   kwin_version="$(rpm -qp --queryformat '%{VERSION}' "$kwin_package")"
                   ;;
                 Arch)
-                  kwin_package="$(find /tmp/kde-packages -type f -name 'kwin-[0-9]*.pkg.tar.*' -print | sort | head -n1)"
+                  kwin_package="$(find /tmp/kde-packages -type f -name 'kwin-[0-9]*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print | sort | head -n1)"
                   [ -n "$kwin_package" ] || { echo "未找到 kwin Arch 包" >&2; exit 1; }
                   kwin_version="$(pacman -Qp "$kwin_package" | awk 'NR == 1 { print $2 }')"
                   ;;
@@ -746,51 +2410,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           package_dir="$RUNNER_TEMP/anland-kde-packages/$ARCHIVE_TARGET"
           asset_dir="$GITHUB_WORKSPACE/.release-assets/$BUILD_TARGET"
-          rm -rf "$package_dir" "$asset_dir"
-          mkdir -p "$package_dir" "$asset_dir"
-
-          copy_packages() {
-            local source_dir="$1"
-            [ -d "$source_dir" ] || return 0
-            find "$source_dir" -type f -name "$PKG_PATTERN" \
-              ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' \
-              ! -name 'kwin-dev_*' ! -name 'kwin-devel-*' ! -name 'kwin-doc-*' \
-              ! -name 'xorg-x11-server-Xwayland-devel-*' -exec cp -v {} "$package_dir/" \;
-          }
-
-          if [ "$BUILD_TARGET" = Arch ]; then
-            copy_packages "$OUTPUT_DIR"
-          else
-            copy_packages "$OUTPUT_DIR/kwin"
-            copy_packages "$OUTPUT_DIR/xwayland"
-            copy_packages "$OUTPUT_DIR/xorg-x11-server-Xwayland"
-          fi
-
-          package_count="$(find "$package_dir" -maxdepth 1 -type f -name "$PKG_PATTERN" | wc -l)"
-          if [ "$package_count" -eq 0 ]; then
-            echo "未为 $BUILD_TARGET 收集到任何可安装的软件包" >&2
-            exit 1
-          fi
-
+          mkdir -p "$asset_dir"
+          python3 scripts/package-artifacts.py collect --target "$BUILD_TARGET" --recursive \
+            --destination "$package_dir" --exclude '*debug*' --exclude '*dbgsym*' \
+            --exclude 'kwin-dev_*' --exclude 'kwin-devel-*' --exclude 'kwin-doc-*' \
+            --exclude 'xorg-x11-server-Xwayland-devel-*' \
+            "$OUTPUT_DIR/kwin" "$OUTPUT_DIR/xwayland" "$OUTPUT_DIR/xorg-x11-server-Xwayland" \
+            "$OUTPUT_DIR/packages" "$OUTPUT_DIR"
           kwin_version="$(tr -d '[:space:]' < "$OUTPUT_DIR/.kwin-version")"
-          case "$kwin_version" in
-            ''|*[!A-Za-z0-9.+~_-]*)
-              echo "KWin 版本包含不支持用于文件名的字符：$kwin_version" >&2
-              exit 1
-              ;;
-          esac
+          case "$kwin_version" in ''|*[!A-Za-z0-9.+~_-]*) echo 'Invalid upstream version' >&2; exit 1 ;; esac
           asset_name="${ASSET_PREFIX}${kwin_version}-${ASSET_ARCH}.tar.gz"
           asset_path="$asset_dir/$asset_name"
-          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=%s\nkwin_version=%s\nbuild_time=%s\n' \
-            "$ARCHIVE_TARGET" "$kwin_version" "$build_time" > "$package_dir/.anland-kde-build-info"
-          tar -C "$RUNNER_TEMP" -czf "$asset_path" "anland-kde-packages/$ARCHIVE_TARGET"
+          tar --mtime="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -C "$RUNNER_TEMP" -czf "$asset_path" "anland-kde-packages/$ARCHIVE_TARGET"
+          python3 scripts/package-artifacts.py verify-archive --target "$BUILD_TARGET" "$asset_path"
           echo "asset_path=$asset_path" >> "$GITHUB_OUTPUT"
-          echo "已将 $package_count 个文件打包进 $asset_name（构建时间：$build_time）"
-
       - name: 上传发布资产
         uses: actions/upload-artifact@v6
         with:
@@ -843,7 +2478,7 @@ jobs:
       - name: 创建固定发布与软件包清单
         env:
           GH_TOKEN: ${{ github.token }}
-          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.kde_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.kde_ref || 'legacy' }}
           ANLAND_COMMIT: ${{ needs.prepare-kde.outputs.anland_commit }}
           BUILD_TARGET_INPUT: ${{ inputs.kde_target || 'all' }}
@@ -959,16 +2594,7 @@ jobs:
           }
 
           archive_build_time() {
-            local archive="$1"
-            local target="$2"
-            local archive_target metadata build_timestamp
-            archive_target="$(archive_target_for_target "$target")"
-            if ! metadata="$(tar -xOzf "$archive" "anland-kde-packages/$archive_target/.anland-kde-build-info" 2>/dev/null)"; then
-              return 1
-            fi
-            build_timestamp="$(printf '%s\n' "$metadata" | sed -n 's/^build_time=//p' | sed -n '1p')"
-            [ -n "$build_timestamp" ] || return 1
-            printf '%s\n' "$build_timestamp"
+            python3 scripts/package-artifacts.py archive-time --target "$2" "$1"
           }
 
           previous_tag=""
@@ -1384,9 +3010,9 @@ jobs:
 
           case "$BUILD_TARGET_INPUT" in
             all)
-              targets='["ubuntu2604","Debian13","Arch"]'
+              targets='["ubuntu2604","Debian13","Fedora43","Fedora44","Arch"]'
               ;;
-            ubuntu2604|Debian13|Arch)
+            ubuntu2604|Debian13|Fedora43|Fedora44|Arch)
               targets="[\"$BUILD_TARGET_INPUT\"]"
               ;;
             *)
@@ -1409,7 +3035,7 @@ jobs:
       - name: 将请求的源解析为单个提交
         id: resolve
         env:
-          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.gnome_ref || 'legacy' }}
         shell: bash
         run: |
@@ -1437,11 +3063,15 @@ jobs:
         target: ${{ fromJson(needs.prepare-gnome.outputs.targets) }}
 
     env:
-      ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/superturtlee/anland.git' }}
+      ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/sjszero/anland.git' }}
       ANLAND_COMMIT: ${{ needs.prepare-gnome.outputs.anland_commit }}
       BUILD_TARGET: ${{ matrix.target }}
 
     steps:
+      - name: 检出云编译产物收集脚本
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
       - name: 解析构建目标
         id: target
         shell: bash
@@ -1466,6 +3096,24 @@ jobs:
               asset_prefix=anland-gnome-debian13-mutter-
               asset_arch=arm64
               archive_target=debian13
+              ;;
+            Fedora43)
+              image=fedora:43
+              script=producers/gnome/Fedora43_v5/build.sh
+              xwayland_patch=''
+              package_pattern='*.rpm'
+              asset_prefix=anland-gnome-fedora43-mutter-
+              asset_arch=aarch64
+              archive_target=fedora43
+              ;;
+            Fedora44)
+              image=fedora:44
+              script=producers/gnome/Fedora44_v5/build.sh
+              xwayland_patch=''
+              package_pattern='*.rpm'
+              asset_prefix=anland-gnome-fedora44-mutter-
+              asset_arch=aarch64
+              archive_target=fedora44
               ;;
             Arch)
               image=ogarcia/archlinux:latest
@@ -1492,7 +3140,92 @@ jobs:
             echo "archive_target=$archive_target"
           } >> "$GITHUB_OUTPUT"
 
+      - name: 在 Fedora ARM64 中构建（匹配发行版源码和 ABI）
+        if: ${{ matrix.target == 'Fedora43' || matrix.target == 'Fedora44' }}
+        env:
+          WM: gnome
+          FEDORA_VERSION: ${{ matrix.target == 'Fedora44' && '44' || '43' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$GITHUB_WORKSPACE/.gnome-package-build/$BUILD_TARGET"
+          mkdir -p "$output_dir"
+          docker run --rm -i --platform linux/arm64 \
+            -e WM -e ANLAND_REPO -e ANLAND_COMMIT -e FEDORA_VERSION \
+            -v "$output_dir:/output" "fedora:$FEDORA_VERSION" bash -s <<'FEDORA_BUILD' 2>&1 | tee "$output_dir/build.log"
+          set -euo pipefail
+          : "${WM:?}" "${ANLAND_REPO:?}" "${ANLAND_COMMIT:?}"
+          case "$WM" in denial|gnome|hyprland|mango|niri) ;; *) echo "Unknown WM: $WM" >&2; exit 1 ;; esac
+          [[ $(uname -m) == aarch64 && $(id -u) == 0 ]] || { echo 'requires an ARM64 Fedora CI container' >&2; exit 1; }
+          source /etc/os-release
+          [[ $ID == fedora && $VERSION_ID == "$FEDORA_VERSION" ]] || exit 1
+          dnf --setopt=install_weak_deps=False install -y git-core ca-certificates curl sudo \
+              python3 util-linux rpm-build rpmdevtools dnf5-plugins tar xz findutils shadow-utils
+          useradd -m -s /bin/bash anland
+          printf 'anland ALL=(root) NOPASSWD: /usr/bin/dnf\n' > /etc/sudoers.d/anland-dnf
+          chmod 0440 /etc/sudoers.d/anland-dnf
+          source_dir=/home/anland/.cache/anland-source
+          mkdir -p "$source_dir"
+          git init --quiet "$source_dir"
+          git -C "$source_dir" remote add origin "$ANLAND_REPO"
+          git -C "$source_dir" fetch --quiet --depth=1 origin "$ANLAND_COMMIT"
+          git -C "$source_dir" checkout --quiet --detach FETCH_HEAD
+          [[ $(git -C "$source_dir" rev-parse HEAD) == "$ANLAND_COMMIT" ]]
+          recipe="$source_dir/producers/$WM/Fedora${FEDORA_VERSION}_v5"
+          test -s "$recipe/dependencies.lock"
+          for script in build.sh startup.sh; do bash -n "$recipe/$script"; done
+          chown -R anland:anland /home/anland
+          mkdir -p /output
+          output_owner=$(stat -c '%u:%g' /output)
+          restore_output_owner() {
+              local build_rc=$?
+              trap - EXIT
+              if ! chown -Rh -- "$output_owner" /output; then
+                  printf 'Failed to restore output ownership to %s\n' "$output_owner" >&2
+                  if [[ $build_rc == 0 ]]; then build_rc=1; fi
+              fi
+              exit "$build_rc"
+          }
+          trap restore_output_owner EXIT
+          chown anland:anland /output
+          runuser -u anland -- env HOME=/home/anland JOBS="$(nproc)" \
+              ANLAND_INSTALL=0 ANLAND_STAGE=build ANLAND_WITH_DEPS=1 ANLAND_OFFLINE=0 \
+              ANLAND_ENGINE_MODE=auto ANLAND_WITH_DE=1 \
+              WORKDIR="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5" \
+              ARTIFACTS_DIR=/output/artifacts bash "$recipe/build.sh"
+          cd /output/artifacts
+          package_list="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/packages.list"
+          checksums="/home/anland/.cache/anland-$WM-fedora${FEDORA_VERSION}-v5/SHA256SUMS"
+          [[ -s $package_list ]] || package_list=/output/artifacts/packages.list
+          [[ -s $checksums ]] || checksums=/output/artifacts/SHA256SUMS
+          test -s "$package_list"
+          sha256sum -c "$checksums"
+          found=()
+          while IFS= read -r package; do
+              [[ $package == "${package##*/}" && $package == *.rpm && -s $package ]]
+              architecture=$(rpm -qp --qf '%{ARCH}' "$package")
+              [[ $architecture == aarch64 || $architecture == noarch ]]
+              rpm -K "$package"
+              found+=("$(rpm -qp --qf '%{NAME}' "$package")")
+          done < "$package_list"
+          actual=$(printf '%s\n' "${found[@]}" | sort)
+          case "$WM" in
+              mango) expected=$(printf '%s\n' mango-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+              hyprland) expected=$(printf '%s\n' hyprland-anland xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+              denial) expected=$(printf '%s\n' denial-anland-engine denial denial-desktop xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+              niri) expected=$(printf '%s\n' niri-anland xwayland-satellite xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+              gnome) expected=$(printf '%s\n' mutter mutter-common mutter-devel xorg-x11-server-Xwayland xorg-x11-server-Xwayland-devel | sort) ;;
+          esac
+          [[ $actual == "$expected" ]] || { printf 'Incomplete Fedora package set:\n%s\nExpected:\n%s\n' "$actual" "$expected" >&2; exit 1; }
+          chmod -R a+rX /output/artifacts
+          printf 'RUNNER_BUILD_ARTIFACTS_OK WM=%s DISTRO=fedora%s COMMIT=%s\n' "$WM" "$FEDORA_VERSION" "$ANLAND_COMMIT"
+          FEDORA_BUILD
+          docker run --rm -v "$output_dir:/output:ro" "fedora:$FEDORA_VERSION" \
+            bash -c 'for f in /output/artifacts/mutter-*.rpm; do [ "$(rpm -qp --qf "%{NAME}" "$f")" != mutter ] || rpm -qp --qf "%{VERSION}\n" "$f"; done' \
+            > "$output_dir/.mutter-version"
+          test -s "$output_dir/.mutter-version"
       - name: 在对应的发行版中构建软件包
+        if: ${{ matrix.target != 'Fedora43' && matrix.target != 'Fedora44' }}
         env:
           DISTRO_IMAGE: ${{ steps.target.outputs.image }}
           BUILD_SCRIPT: ${{ steps.target.outputs.script }}
@@ -1563,7 +3296,7 @@ jobs:
                       mutter_package="$package"
                       break
                     fi
-                  done < <(find /packages/packages -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
+                  done < <(find /packages/packages -maxdepth 1 -type f -name '*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print | sort)
                   [ -n "$mutter_package" ] || { echo "未找到 Mutter pacman 包" >&2; exit 1; }
                   mutter_package_version="$(LC_ALL=C pacman -Qp "$mutter_package" | awk 'NR == 1 { print $2 }')"
                   mutter_version="${mutter_package_version#*:}"
@@ -1614,61 +3347,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           package_dir="$RUNNER_TEMP/anland-gnome-packages/$ARCHIVE_TARGET"
           asset_dir="$GITHUB_WORKSPACE/.release-assets/$BUILD_TARGET"
-          rm -rf "$package_dir" "$asset_dir"
-          mkdir -p "$package_dir" "$asset_dir"
-
-          copy_packages() {
-            local source_dir="$1"
-            [ -d "$source_dir" ] || return 0
-            find "$source_dir" -type f -name "$PKG_PATTERN" \
-              ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' \
-              ! -name 'libmutter-*-dev_*' ! -name 'mutter-doc_*' \
-              ! -name 'mutter-tests_*' ! -name 'mutter-devkit-*' \
-              ! -name 'mutter-docs-*' -exec cp -v {} "$package_dir/" \;
-          }
-
-          if [ ! -r "$OUTPUT_DIR/.mutter-version" ]; then
-            echo "构建输出缺少可读的 .mutter-version；当前产物如下：" >&2
-            find "$OUTPUT_DIR" -maxdepth 3 -printf '%M %u:%g %p\n' >&2 || true
-            exit 1
-          fi
-
-          # 上游脚本可能调整子目录布局，直接从整个 WORKDIR 递归收集二进制包。
-          copy_packages "$OUTPUT_DIR"
-
-          package_count="$(find "$package_dir" -maxdepth 1 -type f -name "$PKG_PATTERN" | wc -l)"
-          if [ "$package_count" -eq 0 ]; then
-            echo "未为 $BUILD_TARGET 收集到任何可安装的软件包" >&2
-            exit 1
-          fi
+          mkdir -p "$asset_dir"
+          python3 scripts/package-artifacts.py collect --target "$BUILD_TARGET" --recursive \
+            --destination "$package_dir" --exclude '*debug*' --exclude '*dbgsym*' \
+            --exclude 'libmutter-*-dev_*' --exclude 'mutter-doc_*' --exclude 'mutter-tests_*' \
+            --exclude 'mutter-devkit-*' --exclude 'mutter-docs-*' "$OUTPUT_DIR"
           if [ "$BUILD_TARGET" = Arch ]; then
-            mutter_package_count="$(find "$package_dir" -maxdepth 1 -type f -name 'mutter-[0-9]*.pkg.tar.*' | wc -l)"
-            xwayland_package_count="$(find "$package_dir" -maxdepth 1 -type f -name 'xorg-xwayland-*.pkg.tar.*' | wc -l)"
-            if [ "$package_count" -ne 2 ] || [ "$mutter_package_count" -ne 1 ] || [ "$xwayland_package_count" -ne 1 ]; then
-              echo "Arch 归档必须恰好包含一个 Mutter 和一个 patched Xwayland 包，当前总数=$package_count Mutter=$mutter_package_count Xwayland=$xwayland_package_count" >&2
-              exit 1
-            fi
+            shopt -s nullglob
+            packages=("$package_dir"/*)
+            [[ ${#packages[@]} == 2 ]]
+            [[ -n $(find "$package_dir" -maxdepth 1 -type f -name 'mutter-[0-9]*.pkg.tar.*' -print -quit) ]]
+            [[ -n $(find "$package_dir" -maxdepth 1 -type f -name 'xorg-xwayland-*.pkg.tar.*' -print -quit) ]]
           fi
-
           mutter_version="$(tr -d '[:space:]' < "$OUTPUT_DIR/.mutter-version")"
-          case "$mutter_version" in
-            ''|*[!A-Za-z0-9.+~_-]*)
-              echo "Mutter 版本包含不支持用于文件名的字符：$mutter_version" >&2
-              exit 1
-              ;;
-          esac
+          case "$mutter_version" in ''|*[!A-Za-z0-9.+~_-]*) echo 'Invalid upstream version' >&2; exit 1 ;; esac
           asset_name="${ASSET_PREFIX}${mutter_version}-${ASSET_ARCH}.tar.gz"
           asset_path="$asset_dir/$asset_name"
-          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=%s\nmutter_version=%s\nbuild_time=%s\n' \
-            "$ARCHIVE_TARGET" "$mutter_version" "$build_time" > "$package_dir/.anland-gnome-build-info"
-          tar -C "$RUNNER_TEMP" -czf "$asset_path" "anland-gnome-packages/$ARCHIVE_TARGET"
+          tar --mtime="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -C "$RUNNER_TEMP" -czf "$asset_path" "anland-gnome-packages/$ARCHIVE_TARGET"
+          python3 scripts/package-artifacts.py verify-archive --target "$BUILD_TARGET" "$asset_path"
           echo "asset_path=$asset_path" >> "$GITHUB_OUTPUT"
-          echo "已将 $package_count 个文件打包进 $asset_name（构建时间：$build_time）"
-
       - name: 上传发布资产
         uses: actions/upload-artifact@v6
         with:
@@ -1721,7 +3420,7 @@ jobs:
       - name: 创建固定发布与软件包清单
         env:
           GH_TOKEN: ${{ github.token }}
-          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/superturtlee/anland.git' }}
+          ANLAND_REPO: ${{ inputs.gnome_repo || 'https://github.com/sjszero/anland.git' }}
           ANLAND_REF: ${{ inputs.gnome_ref || 'legacy' }}
           ANLAND_COMMIT: ${{ needs.prepare-gnome.outputs.anland_commit }}
           BUILD_TARGET_INPUT: ${{ inputs.gnome_target || 'all' }}
@@ -1732,7 +3431,7 @@ jobs:
           release_dir="$GITHUB_WORKSPACE/release-assets"
           mkdir -p "$release_dir"
           rolling_release_tag="anland-gnome-packages"
-          release_targets=(Debian13 ubuntu2604 Arch)
+          release_targets=(Debian13 ubuntu2604 Fedora43 Fedora44 Arch)
           declare -A asset_by_target=()
           declare -A asset_time_by_target=()
           declare -A asset_source_by_target=()
@@ -1744,6 +3443,8 @@ jobs:
             case "$1" in
               Debian13) printf '%s\n' 'anland-gnome-debian13-mutter-' ;;
               ubuntu2604) printf '%s\n' 'anland-gnome-ubuntu2604-mutter-' ;;
+              Fedora43) printf '%s\n' 'anland-gnome-fedora43-mutter-' ;;
+              Fedora44) printf '%s\n' 'anland-gnome-fedora44-mutter-' ;;
               Arch) printf '%s\n' 'anland-gnome-arch-mutter-' ;;
               *) echo "不支持的构建目标：$1" >&2; return 1 ;;
             esac
@@ -1753,6 +3454,8 @@ jobs:
             case "$1" in
               Debian13) printf '%s\n' 'Debian 13' ;;
               ubuntu2604) printf '%s\n' 'Ubuntu 26.04' ;;
+              Fedora43) printf '%s\n' 'Fedora 43' ;;
+              Fedora44) printf '%s\n' 'Fedora 44' ;;
               Arch) printf '%s\n' 'Arch Linux ARM' ;;
               *) echo "不支持的构建目标：$1" >&2; return 1 ;;
             esac
@@ -1761,7 +3464,7 @@ jobs:
           asset_arch_for_target() {
             case "$1" in
               Debian13|ubuntu2604) printf '%s\n' 'arm64' ;;
-              Arch) printf '%s\n' 'aarch64' ;;
+              Fedora43|Fedora44|Arch) printf '%s\n' 'aarch64' ;;
               *) echo "不支持的构建目标：$1" >&2; return 1 ;;
             esac
           }
@@ -1770,6 +3473,8 @@ jobs:
             case "$1" in
               Debian13) printf '%s\n' 'debian13' ;;
               ubuntu2604) printf '%s\n' 'ubuntu2604' ;;
+              Fedora43) printf '%s\n' 'fedora43' ;;
+              Fedora44) printf '%s\n' 'fedora44' ;;
               Arch) printf '%s\n' 'arch' ;;
               *) echo "不支持的构建目标：$1" >&2; return 1 ;;
             esac
@@ -1831,16 +3536,7 @@ jobs:
           }
 
           archive_build_time() {
-            local archive="$1"
-            local target="$2"
-            local archive_target metadata build_timestamp
-            archive_target="$(archive_target_for_target "$target")"
-            if ! metadata="$(tar -xOzf "$archive" "anland-gnome-packages/$archive_target/.anland-gnome-build-info" 2>/dev/null)"; then
-              return 1
-            fi
-            build_timestamp="$(printf '%s\n' "$metadata" | sed -n 's/^build_time=//p' | sed -n '1p')"
-            [ -n "$build_timestamp" ] || return 1
-            printf '%s\n' "$build_timestamp"
+            python3 scripts/package-artifacts.py archive-time --target "$2" "$1"
           }
 
           previous_tag=""
@@ -1871,6 +3567,12 @@ jobs:
               ;;
             Debian13)
               selected_prefix="$(asset_prefix_for_target Debian13)"
+              ;;
+            Fedora43)
+              selected_prefix="$(asset_prefix_for_target Fedora43)"
+              ;;
+            Fedora44)
+              selected_prefix="$(asset_prefix_for_target Fedora44)"
               ;;
             Arch)
               selected_prefix="$(asset_prefix_for_target Arch)"
@@ -2353,13 +4055,12 @@ jobs:
             # that lands mid-sync dies with "File has unexpected size ...
             # Mirror sync in progress?" — transient, and gone on the next try.
             apt-get update || { sleep 10; apt-get update; }
-            apt-get install -y --no-install-recommends ca-certificates git
+            apt-get install -y --no-install-recommends ca-certificates git python3
           elif command -v dnf >/dev/null; then
-            dnf install -y --setopt=install_weak_deps=False ca-certificates git
+            dnf install -y --setopt=install_weak_deps=False ca-certificates git python3
           else
-            pacman -Syu --noconfirm --needed ca-certificates git
+            pacman -Syu --noconfirm --needed ca-certificates git python
           fi
-
       - name: 检出打包项目
         uses: actions/checkout@v5
 
@@ -2399,14 +4100,16 @@ jobs:
           chmod +x scripts/build-anland-session-package.sh
           bash scripts/build-anland-session-package.sh
 
+          python3 scripts/package-artifacts.py collect --target "$TARGET" \
+            --destination "$GITHUB_WORKSPACE/.package-deliverables/session/$TARGET" \
+            --name-prefix "anland-session-$TARGET-" "$GITHUB_WORKSPACE/out/$TARGET"
       - name: 上传验证包
         uses: actions/upload-artifact@v6
         with:
           name: anland-session-${{ matrix.target }}-arm64
-          path: out/${{ matrix.target }}/
+          path: .package-deliverables/session/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 1
-
   release-session:
     name: 更新 Anland Next session 滚动发布
     needs: [prepare-session, build-session]
@@ -2565,35 +4268,28 @@ jobs:
             *) echo "不支持的构建目标：$BUILD_TARGET_INPUT" >&2; exit 1 ;;
           esac
 
-          # 将每个平台的原生包改成带目标前缀的 Release 资产名，避免五个平台同名。
+          # Route only package files; no build manifest is transported as an Artifact.
           missing_targets=()
           for target in "${release_targets[@]}"; do
             artifact_dir="$release_dir/anland-session-${target}-arm64"
-            # actions/download-artifact 在匹配到的 artifact 只有一个时不建
-            # 子目录，而是直接解到 path 下（与 merge-multiple 无关）。单目标
-            # dispatch 就会走到这个分支，此时用 manifest 里的 target 认领它。
-            if [ ! -f "$artifact_dir/manifest.env" ] && \
-               [ -f "$release_dir/manifest.env" ] && \
-               [ "$(sed -n 's/^target=//p' "$release_dir/manifest.env" | sed -n '1p')" = "$target" ]; then
-              artifact_dir="$release_dir"
-            fi
-            manifest="$artifact_dir/manifest.env"
-            if [ -f "$manifest" ]; then
-              package_name="$(sed -n 's/^package=//p' "$manifest" | sed -n '1p')"
-              package_name="${package_name##*/}"
-              if [ -z "$package_name" ] || [ ! -f "$artifact_dir/$package_name" ]; then
-                echo "$target 构建 artifact 缺少 manifest 指定的软件包。" >&2
-                exit 1
-              fi
-              case "$target:$package_name" in
-                ubuntu2604:*.deb|debian13:*.deb|fedora43:*.rpm|fedora44:*.rpm|arch:*.pkg.tar.zst) ;;
-                *) echo "$target 生成了不匹配的软件包：$package_name" >&2; exit 1 ;;
+            [ -d "$artifact_dir" ] || artifact_dir="$release_dir"
+            shopt -s nullglob
+            candidates=()
+            for package in "$artifact_dir"/anland-session-"$target"-*; do
+              case "$target:${package##*/}" in
+                ubuntu2604:*.deb|debian13:*.deb|fedora43:*.rpm|fedora44:*.rpm|arch:*.pkg.tar.zst)
+                  [[ -f "$package" && ! -L "$package" && -s "$package" ]] || exit 1
+                  candidates+=("$package") ;;
               esac
-              asset="$(asset_prefix_for_target "$target")$package_name"
-              cp -f "$artifact_dir/$package_name" "$release_dir/$asset"
+            done
+            if [ "${#candidates[@]}" -gt 1 ]; then
+              echo "Multiple session packages for $target" >&2; exit 1
+            elif [ "${#candidates[@]}" -eq 1 ]; then
+              package="${candidates[0]}"
+              asset="${package##*/}"
+              [ "$package" = "$release_dir/$asset" ] || cp -p "$package" "$release_dir/$asset"
               asset_by_target["$target"]="$asset"
-              asset_time_by_target["$target"]="$(sed -n 's/^build_time=//p' "$manifest" | sed -n '1p')"
-              [ -n "${asset_time_by_target[$target]}" ] || asset_time_by_target["$target"]='未知'
+              asset_time_by_target["$target"]="$build_time"
               asset_source_by_target["$target"]='本次构建'
               updated_targets+=("$target")
             else

@@ -218,6 +218,10 @@ jobs:
       ANLAND_REPO: ${{ inputs.niri_repo || 'https://github.com/Goldzxcbug/anland.git' }}
       ANLAND_COMMIT: ${{ needs.prepare-niri.outputs.anland_commit }}
     steps:
+      - name: 检出云编译产物收集脚本
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
       - name: 在 Arch Linux ARM 中构建软件包
         shell: bash
         run: |
@@ -269,7 +273,7 @@ jobs:
                     ;;
                   *) echo "构建生成了意外的 Arch 包：$package_name" >&2; exit 1 ;;
                 esac
-              done < <(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
+              done < <(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print | sort)
               [ "$found_niri" = true ] || { echo "未找到 niri-anland pacman 包" >&2; exit 1; }
               [ "$found_xwayland" = true ] || { echo "未找到打过补丁的 xorg-xwayland pacman 包" >&2; exit 1; }
               package_version="$(LC_ALL=C pacman -Qp "$niri_package" | awk 'NR == 1 { print $2 }')"
@@ -291,20 +295,19 @@ jobs:
           release_dir="$GITHUB_WORKSPACE/.release-assets/niri"
           rm -rf "$package_dir" "$release_dir"
           mkdir -p "$package_dir" "$release_dir"
-          find "$output_dir/packages" -maxdepth 1 -type f -name '*.pkg.tar.*' -exec cp -v {} "$package_dir/" \;
-          package_count="$(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' | wc -l)"
+          python3 scripts/package-artifacts.py collect --target Arch --destination "$package_dir" "$output_dir/packages"
+          package_count="$(find "$package_dir" -maxdepth 1 -type f -name '*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) | wc -l)"
           [ "$package_count" -gt 0 ] || { echo "没有收集到 pacman 软件包" >&2; exit 1; }
           version="$(tr -d '[:space:]' < "$output_dir/.niri-version")"
           case "$version" in
             ''|*[!A-Za-z0-9.+~_-]*) echo "无效的 Niri 包版本：$version" >&2; exit 1 ;;
           esac
           build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=arch\nniri_version=%s\nbuild_time=%s\n' "$version" "$build_time" > "$package_dir/.anland-niri-build-info"
           asset="anland-niri-arch-${version}-aarch64.tar.gz"
-          tar -C "$RUNNER_TEMP" -czf "$release_dir/$asset" anland-niri-packages/arch
+          tar --mtime="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -C "$RUNNER_TEMP" -czf "$release_dir/$asset" anland-niri-packages/arch
+          python3 scripts/package-artifacts.py verify-archive --target Arch "$release_dir/$asset"
           echo "asset_path=$release_dir/$asset" >> "$GITHUB_OUTPUT"
           echo "已将 $package_count 个包打包为 $asset"
-
       - name: 上传构建资产
         uses: actions/upload-artifact@v6
         with:
@@ -365,8 +368,9 @@ jobs:
             echo "没有且仅有一个 Niri 发布归档。" >&2; exit 1;
           }
           asset="${archive##*/}"
-          build_time="$(tar -xOzf "$archive" anland-niri-packages/arch/.anland-niri-build-info | sed -n 's/^build_time=//p')"
-          version="$(tar -xOzf "$archive" anland-niri-packages/arch/.anland-niri-build-info | sed -n 's/^niri_version=//p')"
+          build_time="$(python3 scripts/package-artifacts.py archive-time --target Arch "$archive")"
+          version="${asset#anland-niri-arch-}"
+          version="${version%-aarch64.tar.gz}"
           [ -n "$build_time" ] && [ -n "$version" ] || { echo "Niri 构建元数据无效。" >&2; exit 1; }
           {
             printf 'format=1\nrelease_tag=%s\nrevision=run-%s-%s\ngenerated_at=%s\n' "$rolling_release_tag" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
@@ -409,7 +413,6 @@ jobs:
             gh release edit "$rolling_release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
           fi
           echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$rolling_release_tag"
-
       - name: 同步到 CNB 国内镜像
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
         shell: bash
@@ -499,6 +502,10 @@ jobs:
       BUILD_TARGET: ${{ matrix.target }}
 
     steps:
+      - name: 检出云编译产物收集脚本
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
       - name: 解析构建目标
         id: target
         shell: bash
@@ -718,7 +725,7 @@ jobs:
                   kwin_version="$(rpm -qp --queryformat '%{VERSION}' "$kwin_package")"
                   ;;
                 Arch)
-                  kwin_package="$(find /tmp/kde-packages -type f -name 'kwin-[0-9]*.pkg.tar.*' -print | sort | head -n1)"
+                  kwin_package="$(find /tmp/kde-packages -type f -name 'kwin-[0-9]*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print | sort | head -n1)"
                   [ -n "$kwin_package" ] || { echo "未找到 kwin Arch 包" >&2; exit 1; }
                   kwin_version="$(pacman -Qp "$kwin_package" | awk 'NR == 1 { print $2 }')"
                   ;;
@@ -743,51 +750,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           package_dir="$RUNNER_TEMP/anland-kde-packages/$ARCHIVE_TARGET"
           asset_dir="$GITHUB_WORKSPACE/.release-assets/$BUILD_TARGET"
-          rm -rf "$package_dir" "$asset_dir"
-          mkdir -p "$package_dir" "$asset_dir"
-
-          copy_packages() {
-            local source_dir="$1"
-            [ -d "$source_dir" ] || return 0
-            find "$source_dir" -type f -name "$PKG_PATTERN" \
-              ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' \
-              ! -name 'kwin-dev_*' ! -name 'kwin-devel-*' ! -name 'kwin-doc-*' \
-              ! -name 'xorg-x11-server-Xwayland-devel-*' -exec cp -v {} "$package_dir/" \;
-          }
-
-          if [ "$BUILD_TARGET" = Arch ]; then
-            copy_packages "$OUTPUT_DIR"
-          else
-            copy_packages "$OUTPUT_DIR/kwin"
-            copy_packages "$OUTPUT_DIR/xwayland"
-            copy_packages "$OUTPUT_DIR/xorg-x11-server-Xwayland"
-          fi
-
-          package_count="$(find "$package_dir" -maxdepth 1 -type f -name "$PKG_PATTERN" | wc -l)"
-          if [ "$package_count" -eq 0 ]; then
-            echo "未为 $BUILD_TARGET 收集到任何可安装的软件包" >&2
-            exit 1
-          fi
-
+          mkdir -p "$asset_dir"
+          python3 scripts/package-artifacts.py collect --target "$BUILD_TARGET" --recursive \
+            --destination "$package_dir" --exclude '*debug*' --exclude '*dbgsym*' \
+            --exclude 'kwin-dev_*' --exclude 'kwin-devel-*' --exclude 'kwin-doc-*' \
+            --exclude 'xorg-x11-server-Xwayland-devel-*' \
+            "$OUTPUT_DIR/kwin" "$OUTPUT_DIR/xwayland" "$OUTPUT_DIR/xorg-x11-server-Xwayland" \
+            "$OUTPUT_DIR/packages" "$OUTPUT_DIR"
           kwin_version="$(tr -d '[:space:]' < "$OUTPUT_DIR/.kwin-version")"
-          case "$kwin_version" in
-            ''|*[!A-Za-z0-9.+~_-]*)
-              echo "KWin 版本包含不支持用于文件名的字符：$kwin_version" >&2
-              exit 1
-              ;;
-          esac
+          case "$kwin_version" in ''|*[!A-Za-z0-9.+~_-]*) echo 'Invalid upstream version' >&2; exit 1 ;; esac
           asset_name="${ASSET_PREFIX}${kwin_version}-${ASSET_ARCH}.tar.gz"
           asset_path="$asset_dir/$asset_name"
-          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=%s\nkwin_version=%s\nbuild_time=%s\n' \
-            "$ARCHIVE_TARGET" "$kwin_version" "$build_time" > "$package_dir/.anland-kde-build-info"
-          tar -C "$RUNNER_TEMP" -czf "$asset_path" "anland-kde-packages/$ARCHIVE_TARGET"
+          tar --mtime="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -C "$RUNNER_TEMP" -czf "$asset_path" "anland-kde-packages/$ARCHIVE_TARGET"
+          python3 scripts/package-artifacts.py verify-archive --target "$BUILD_TARGET" "$asset_path"
           echo "asset_path=$asset_path" >> "$GITHUB_OUTPUT"
-          echo "已将 $package_count 个文件打包进 $asset_name（构建时间：$build_time）"
-
       - name: 上传发布资产
         uses: actions/upload-artifact@v6
         with:
@@ -956,16 +934,7 @@ jobs:
           }
 
           archive_build_time() {
-            local archive="$1"
-            local target="$2"
-            local archive_target metadata build_timestamp
-            archive_target="$(archive_target_for_target "$target")"
-            if ! metadata="$(tar -xOzf "$archive" "anland-kde-packages/$archive_target/.anland-kde-build-info" 2>/dev/null)"; then
-              return 1
-            fi
-            build_timestamp="$(printf '%s\n' "$metadata" | sed -n 's/^build_time=//p' | sed -n '1p')"
-            [ -n "$build_timestamp" ] || return 1
-            printf '%s\n' "$build_timestamp"
+            python3 scripts/package-artifacts.py archive-time --target "$2" "$1"
           }
 
           previous_tag=""
@@ -1349,7 +1318,6 @@ jobs:
           trap - EXIT
 
           echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$release_tag"
-
       - name: 同步到 CNB 国内镜像
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
         shell: bash
@@ -1439,6 +1407,10 @@ jobs:
       BUILD_TARGET: ${{ matrix.target }}
 
     steps:
+      - name: 检出云编译产物收集脚本
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
       - name: 解析构建目标
         id: target
         shell: bash
@@ -1560,7 +1532,7 @@ jobs:
                       mutter_package="$package"
                       break
                     fi
-                  done < <(find /packages/packages -maxdepth 1 -type f -name '*.pkg.tar.*' -print | sort)
+                  done < <(find /packages/packages -maxdepth 1 -type f -name '*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print | sort)
                   [ -n "$mutter_package" ] || { echo "未找到 Mutter pacman 包" >&2; exit 1; }
                   mutter_package_version="$(LC_ALL=C pacman -Qp "$mutter_package" | awk 'NR == 1 { print $2 }')"
                   mutter_version="${mutter_package_version#*:}"
@@ -1611,61 +1583,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           package_dir="$RUNNER_TEMP/anland-gnome-packages/$ARCHIVE_TARGET"
           asset_dir="$GITHUB_WORKSPACE/.release-assets/$BUILD_TARGET"
-          rm -rf "$package_dir" "$asset_dir"
-          mkdir -p "$package_dir" "$asset_dir"
-
-          copy_packages() {
-            local source_dir="$1"
-            [ -d "$source_dir" ] || return 0
-            find "$source_dir" -type f -name "$PKG_PATTERN" \
-              ! -name '*debug*' ! -name '*dbgsym*' ! -name '*.src.*' \
-              ! -name 'libmutter-*-dev_*' ! -name 'mutter-doc_*' \
-              ! -name 'mutter-tests_*' ! -name 'mutter-devkit-*' \
-              ! -name 'mutter-docs-*' -exec cp -v {} "$package_dir/" \;
-          }
-
-          if [ ! -r "$OUTPUT_DIR/.mutter-version" ]; then
-            echo "构建输出缺少可读的 .mutter-version；当前产物如下：" >&2
-            find "$OUTPUT_DIR" -maxdepth 3 -printf '%M %u:%g %p\n' >&2 || true
-            exit 1
-          fi
-
-          # 上游脚本可能调整子目录布局，直接从整个 WORKDIR 递归收集二进制包。
-          copy_packages "$OUTPUT_DIR"
-
-          package_count="$(find "$package_dir" -maxdepth 1 -type f -name "$PKG_PATTERN" | wc -l)"
-          if [ "$package_count" -eq 0 ]; then
-            echo "未为 $BUILD_TARGET 收集到任何可安装的软件包" >&2
-            exit 1
-          fi
+          mkdir -p "$asset_dir"
+          python3 scripts/package-artifacts.py collect --target "$BUILD_TARGET" --recursive \
+            --destination "$package_dir" --exclude '*debug*' --exclude '*dbgsym*' \
+            --exclude 'libmutter-*-dev_*' --exclude 'mutter-doc_*' --exclude 'mutter-tests_*' \
+            --exclude 'mutter-devkit-*' --exclude 'mutter-docs-*' "$OUTPUT_DIR"
           if [ "$BUILD_TARGET" = Arch ]; then
-            mutter_package_count="$(find "$package_dir" -maxdepth 1 -type f -name 'mutter-[0-9]*.pkg.tar.*' | wc -l)"
-            xwayland_package_count="$(find "$package_dir" -maxdepth 1 -type f -name 'xorg-xwayland-*.pkg.tar.*' | wc -l)"
-            if [ "$package_count" -ne 2 ] || [ "$mutter_package_count" -ne 1 ] || [ "$xwayland_package_count" -ne 1 ]; then
-              echo "Arch 归档必须恰好包含一个 Mutter 和一个 patched Xwayland 包，当前总数=$package_count Mutter=$mutter_package_count Xwayland=$xwayland_package_count" >&2
-              exit 1
-            fi
+            shopt -s nullglob
+            packages=("$package_dir"/*)
+            [[ ${#packages[@]} == 2 ]]
+            [[ -n $(find "$package_dir" -maxdepth 1 -type f -name 'mutter-[0-9]*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print -quit) ]]
+            [[ -n $(find "$package_dir" -maxdepth 1 -type f -name 'xorg-xwayland-*.pkg.tar.*' \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print -quit) ]]
           fi
-
           mutter_version="$(tr -d '[:space:]' < "$OUTPUT_DIR/.mutter-version")"
-          case "$mutter_version" in
-            ''|*[!A-Za-z0-9.+~_-]*)
-              echo "Mutter 版本包含不支持用于文件名的字符：$mutter_version" >&2
-              exit 1
-              ;;
-          esac
+          case "$mutter_version" in ''|*[!A-Za-z0-9.+~_-]*) echo 'Invalid upstream version' >&2; exit 1 ;; esac
           asset_name="${ASSET_PREFIX}${mutter_version}-${ASSET_ARCH}.tar.gz"
           asset_path="$asset_dir/$asset_name"
-          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          printf 'target=%s\nmutter_version=%s\nbuild_time=%s\n' \
-            "$ARCHIVE_TARGET" "$mutter_version" "$build_time" > "$package_dir/.anland-gnome-build-info"
-          tar -C "$RUNNER_TEMP" -czf "$asset_path" "anland-gnome-packages/$ARCHIVE_TARGET"
+          tar --mtime="$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -C "$RUNNER_TEMP" -czf "$asset_path" "anland-gnome-packages/$ARCHIVE_TARGET"
+          python3 scripts/package-artifacts.py verify-archive --target "$BUILD_TARGET" "$asset_path"
           echo "asset_path=$asset_path" >> "$GITHUB_OUTPUT"
-          echo "已将 $package_count 个文件打包进 $asset_name（构建时间：$build_time）"
-
       - name: 上传发布资产
         uses: actions/upload-artifact@v6
         with:
@@ -1828,16 +1766,7 @@ jobs:
           }
 
           archive_build_time() {
-            local archive="$1"
-            local target="$2"
-            local archive_target metadata build_timestamp
-            archive_target="$(archive_target_for_target "$target")"
-            if ! metadata="$(tar -xOzf "$archive" "anland-gnome-packages/$archive_target/.anland-gnome-build-info" 2>/dev/null)"; then
-              return 1
-            fi
-            build_timestamp="$(printf '%s\n' "$metadata" | sed -n 's/^build_time=//p' | sed -n '1p')"
-            [ -n "$build_timestamp" ] || return 1
-            printf '%s\n' "$build_timestamp"
+            python3 scripts/package-artifacts.py archive-time --target "$2" "$1"
           }
 
           previous_tag=""
@@ -2213,7 +2142,6 @@ jobs:
           trap - EXIT
 
           echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$release_tag"
-
       - name: 同步到 CNB 国内镜像
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
         shell: bash
@@ -2350,13 +2278,12 @@ jobs:
             # that lands mid-sync dies with "File has unexpected size ...
             # Mirror sync in progress?" — transient, and gone on the next try.
             apt-get update || { sleep 10; apt-get update; }
-            apt-get install -y --no-install-recommends ca-certificates git
+            apt-get install -y --no-install-recommends ca-certificates git python3
           elif command -v dnf >/dev/null; then
-            dnf install -y --setopt=install_weak_deps=False ca-certificates git
+            dnf install -y --setopt=install_weak_deps=False ca-certificates git python3
           else
-            pacman -Syu --noconfirm --needed ca-certificates git
+            pacman -Syu --noconfirm --needed ca-certificates git python
           fi
-
       - name: 检出打包项目
         uses: actions/checkout@v5
 
@@ -2396,11 +2323,14 @@ jobs:
           chmod +x scripts/build-anland-session-package.sh
           bash scripts/build-anland-session-package.sh
 
+          python3 scripts/package-artifacts.py collect --target "$TARGET" \
+            --destination "$GITHUB_WORKSPACE/.package-deliverables/session/$TARGET" \
+            --name-prefix "anland-session-$TARGET-" "$GITHUB_WORKSPACE/out/$TARGET"
       - name: 上传验证包
         uses: actions/upload-artifact@v6
         with:
           name: anland-session-${{ matrix.target }}-arm64
-          path: out/${{ matrix.target }}/
+          path: .package-deliverables/session/${{ matrix.target }}/*
           if-no-files-found: error
           retention-days: 1
 
@@ -2562,35 +2492,28 @@ jobs:
             *) echo "不支持的构建目标：$BUILD_TARGET_INPUT" >&2; exit 1 ;;
           esac
 
-          # 将每个平台的原生包改成带目标前缀的 Release 资产名，避免五个平台同名。
+          # Route only package files; no build manifest is transported as an Artifact.
           missing_targets=()
           for target in "${release_targets[@]}"; do
             artifact_dir="$release_dir/anland-session-${target}-arm64"
-            # actions/download-artifact 在匹配到的 artifact 只有一个时不建
-            # 子目录，而是直接解到 path 下（与 merge-multiple 无关）。单目标
-            # dispatch 就会走到这个分支，此时用 manifest 里的 target 认领它。
-            if [ ! -f "$artifact_dir/manifest.env" ] && \
-               [ -f "$release_dir/manifest.env" ] && \
-               [ "$(sed -n 's/^target=//p' "$release_dir/manifest.env" | sed -n '1p')" = "$target" ]; then
-              artifact_dir="$release_dir"
-            fi
-            manifest="$artifact_dir/manifest.env"
-            if [ -f "$manifest" ]; then
-              package_name="$(sed -n 's/^package=//p' "$manifest" | sed -n '1p')"
-              package_name="${package_name##*/}"
-              if [ -z "$package_name" ] || [ ! -f "$artifact_dir/$package_name" ]; then
-                echo "$target 构建 artifact 缺少 manifest 指定的软件包。" >&2
-                exit 1
-              fi
-              case "$target:$package_name" in
-                ubuntu2604:*.deb|debian13:*.deb|fedora43:*.rpm|fedora44:*.rpm|arch:*.pkg.tar.zst) ;;
-                *) echo "$target 生成了不匹配的软件包：$package_name" >&2; exit 1 ;;
+            [ -d "$artifact_dir" ] || artifact_dir="$release_dir"
+            shopt -s nullglob
+            candidates=()
+            for package in "$artifact_dir"/anland-session-"$target"-*; do
+              case "$target:${package##*/}" in
+                ubuntu2604:*.deb|debian13:*.deb|fedora43:*.rpm|fedora44:*.rpm|arch:*.pkg.tar.zst)
+                  [[ -f "$package" && ! -L "$package" && -s "$package" ]] || exit 1
+                  candidates+=("$package") ;;
               esac
-              asset="$(asset_prefix_for_target "$target")$package_name"
-              cp -f "$artifact_dir/$package_name" "$release_dir/$asset"
+            done
+            if [ "${#candidates[@]}" -gt 1 ]; then
+              echo "Multiple session packages for $target" >&2; exit 1
+            elif [ "${#candidates[@]}" -eq 1 ]; then
+              package="${candidates[0]}"
+              asset="${package##*/}"
+              [ "$package" = "$release_dir/$asset" ] || cp -p "$package" "$release_dir/$asset"
               asset_by_target["$target"]="$asset"
-              asset_time_by_target["$target"]="$(sed -n 's/^build_time=//p' "$manifest" | sed -n '1p')"
-              [ -n "${asset_time_by_target[$target]}" ] || asset_time_by_target["$target"]='未知'
+              asset_time_by_target["$target"]="$build_time"
               asset_source_by_target["$target"]='本次构建'
               updated_targets+=("$target")
             else
@@ -2818,7 +2741,6 @@ jobs:
           fi
 
           echo "已更新 $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$release_tag"
-
       - name: 同步到 CNB 国内镜像
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_cnb }}
         shell: bash
